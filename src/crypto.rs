@@ -65,7 +65,7 @@ fn hash_into(
 }
 
 pub fn seal(password: &[u8], plaintext: &[u8], params: KdfParams) -> Result<Vec<u8>, VaultError> {
-    let dek = Key32::random();
+    let dek = Key32::random()?;
     let vault_nonce = random_array()?;
     let header = wrap_dek(password, &dek, params, vault_nonce)?;
     let ciphertext = encrypt(&dek, &vault_nonce, &vault_aad(&header), plaintext)?;

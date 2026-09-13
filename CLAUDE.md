@@ -5,7 +5,8 @@ Vault locale cifrato, CLI. Nessuna sincronizzazione, nessun server.
 ## Stack
 
 - Rust 2021, `cargo` workspace singolo
-- `argon2` 0.5, `chacha20poly1305` 0.10, `zeroize` 1 (feature `zeroize_derive`), `rand` 0.8, `thiserror` 1
+- `argon2` 0.5 (feature `zeroize`), `chacha20poly1305` 0.10, `zeroize` 1 (feature `zeroize_derive`), `rand` 0.8, `thiserror` 1
+- Vault store e CLI: `serde` 1 (feature `derive`), `serde_json` 1, `clap` 4 (feature `derive`), `rpassword` 7
 - Nessuna dipendenza aggiuntiva senza richiesta esplicita
 
 ## Invarianti crittografici — NON modificabili

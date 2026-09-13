@@ -32,7 +32,9 @@ pub fn save(path: &Path, password: &[u8], data: &VaultData) -> Result<(), VaultE
 }
 
 /// Cambia la master password ri-cifrando solo la DEK: il ciphertext del vault
-/// resta identico.
+/// resta identico. Il `.bak` viene eliminato e non ricreato: si aprirebbe con
+/// la vecchia password e, con la DEK invariata, darebbe accesso anche al vault
+/// attuale.
 pub fn change_password(path: &Path, old: &[u8], new: &[u8]) -> Result<(), VaultError> {
     change_password_with_params(path, old, new, KdfParams::default())
 }
@@ -56,7 +58,18 @@ fn change_password_with_params(
 ) -> Result<(), VaultError> {
     let current = fs::read(path)?;
     let file = crypto::change_master(old, new, &current, params)?;
-    replace(path, &file)
+    // Prima il .bak: se la rimozione fallisce la password non è ancora cambiata.
+    // Il sync della directory in `write_atomic` rende persistente anche questa.
+    remove_if_exists(&backup_path(path))?;
+    write_atomic(path, &file)
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), VaultError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Una `Vec` che cresce rialloca e libera i buffer vecchi senza azzerarli, e
@@ -282,33 +295,38 @@ mod tests {
     }
 
     #[test]
-    fn change_password_rewraps_and_backs_up() {
+    fn change_password_rewraps_and_removes_bak() {
         let dir = TempDir::new("passwd");
         let vault = dir.vault();
+        save_with_params(&vault, b"old", &data(&["first"]), FAST).unwrap();
         save_with_params(&vault, b"old", &data(&["secret"]), FAST).unwrap();
+        assert_eq!(dir.listing(), ["vault.pwdv", "vault.pwdv.bak"]);
         let before = fs::read(&vault).unwrap();
 
         change_password_with_params(&vault, b"old", b"new", FAST).unwrap();
         let after = fs::read(&vault).unwrap();
 
         assert_eq!(&after[106..], &before[106..]);
-        assert_eq!(fs::read(backup_path(&vault)).unwrap(), before);
         assert_eq!(passwords(&load(&vault, b"new").unwrap()), ["secret"]);
         assert!(matches!(load(&vault, b"old"), Err(VaultError::AuthFailed)));
-        assert_eq!(dir.listing(), ["vault.pwdv", "vault.pwdv.bak"]);
+        // Il .bak si aprirebbe con la vecchia password: non deve sopravvivere.
+        assert_eq!(dir.listing(), ["vault.pwdv"]);
     }
 
     #[test]
     fn change_password_with_wrong_old_leaves_files_untouched() {
         let dir = TempDir::new("passwd-wrong");
         let vault = dir.vault();
+        save_with_params(&vault, b"old", &data(&["first"]), FAST).unwrap();
         save_with_params(&vault, b"old", &data(&["secret"]), FAST).unwrap();
         let before = fs::read(&vault).unwrap();
+        let bak_before = fs::read(backup_path(&vault)).unwrap();
 
         let result = change_password_with_params(&vault, b"wrong", b"new", FAST);
         assert!(matches!(result, Err(VaultError::AuthFailed)));
         assert_eq!(fs::read(&vault).unwrap(), before);
-        assert_eq!(dir.listing(), ["vault.pwdv"]);
+        assert_eq!(fs::read(backup_path(&vault)).unwrap(), bak_before);
+        assert_eq!(dir.listing(), ["vault.pwdv", "vault.pwdv.bak"]);
     }
 
     #[test]
