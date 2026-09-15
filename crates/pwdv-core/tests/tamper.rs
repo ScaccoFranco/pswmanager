@@ -5,9 +5,9 @@
 use std::ops::Range;
 use std::panic::catch_unwind;
 
-use pwdv::crypto::{change_master, open, seal};
-use pwdv::error::VaultError;
-use pwdv::format::KdfParams;
+use pwdv_core::crypto::{change_master, open, seal};
+use pwdv_core::error::VaultError;
+use pwdv_core::format::KdfParams;
 
 /// Parametri ridotti per tenere bassi i tempi. Solo nei test.
 const FAST: KdfParams = KdfParams {

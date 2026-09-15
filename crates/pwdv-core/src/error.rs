@@ -17,6 +17,10 @@ pub enum VaultError {
     /// citare frammenti del contenuto (cioè password).
     #[error("vault contents are malformed or of an unsupported version")]
     Malformed,
+    /// Dopo l'apertura un altro programma ha riscritto il file con un'altra
+    /// chiave (per esempio cambiando la password).
+    #[error("the vault file was rewritten by another program after it was opened")]
+    Conflict,
     #[error("key derivation error: {0}")]
     Kdf(String),
     #[error("I/O error: {0}")]

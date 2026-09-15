@@ -9,8 +9,8 @@ use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 use zeroize::Zeroizing;
 
-use pwdv::store;
-use pwdv::vault::{Entry, VaultData};
+use pwdv_core::store;
+use pwdv_core::vault::{Entry, VaultData};
 
 type CliResult<T = ()> = Result<T, Box<dyn Error>>;
 

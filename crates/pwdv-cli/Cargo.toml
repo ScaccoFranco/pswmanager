@@ -1,0 +1,16 @@
+[package]
+name = "pwdv-cli"
+version.workspace = true
+edition.workspace = true
+
+# Il binario resta `pwdv`, come prima della divisione in workspace.
+[[bin]]
+name = "pwdv"
+path = "src/main.rs"
+
+[dependencies]
+pwdv-core.workspace = true
+clap.workspace = true
+rand.workspace = true
+rpassword.workspace = true
+zeroize.workspace = true

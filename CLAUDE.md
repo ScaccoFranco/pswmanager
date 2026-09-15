@@ -52,6 +52,18 @@ I parametri KDF e il salt sono esclusi dall'AAD del vault per consentire il camb
 - Input troncato o malformato → `Err`, mai panic.
 - Scrittura su disco atomica: file temporaneo nella stessa directory, `sync_all()`, poi `rename`.
 
+## GUI — vincoli
+
+- Framework: `eframe`/`egui` 0.28+. Feature `persistence` **disabilitata**: nessuno stato di widget o memoria egui viene scritto su disco.
+- `pwdv-core` non dipende da eframe, egui, arboard o da qualsiasi crate grafico. Dipendenza in una sola direzione: gui → core.
+- La derivazione Argon2id non viene mai eseguita sul thread della UI. Thread separato + canale, spinner durante l'attesa.
+- Buffer della master password: `String` dedicata, dopo l'invio `zeroize()` e poi `clear()`. Mai solo `clear()`.
+- Nessuna struct che contiene password decifrate deriva `Debug`, `Serialize` o `Clone`.
+- Nessun segreto in titolo finestra, tooltip, log, messaggi di errore, o nel testo di un widget non mascherato.
+- Auto-lock: alla scadenza del timer la DEK e i dati del vault vengono zeroizzati e lo stato torna a `Locked`. Non è sufficiente cambiare schermata.
+- Gli errori mostrati all'utente non distinguono password sbagliata da file manomesso.
+- Fuori scope, da dichiarare nel README: protezione da screenshot, keylogger, screen recording e clipboard manager di terze parti.
+
 ## Test obbligatori
 
 Ogni step si chiude con `cargo test` e `cargo clippy -- -D warnings` verdi.

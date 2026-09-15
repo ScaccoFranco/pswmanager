@@ -8,7 +8,7 @@ use chacha20poly1305::aead::{Aead, AeadInPlace, KeyInit, Payload};
 use chacha20poly1305::XChaCha20Poly1305;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use zeroize::Zeroizing;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::error::VaultError;
 use crate::format::{
@@ -64,23 +64,95 @@ fn hash_into(
         .map_err(|e| VaultError::Kdf(e.to_string()))
 }
 
+/// Chiave di un vault aperto: la DEK e i primi 106 byte dell'header (magic,
+/// version, kdf_id, parametri KDF, salt, dek_nonce, wrapped_dek), che restano
+/// uguali finché non cambia la password. Permette di ricifrare il vault con
+/// [`reseal`] senza master password e senza Argon2.
+/// Niente `Debug`/`Display`/`Clone`: contiene la DEK, azzerata al drop.
+#[derive(ZeroizeOnDrop)]
+pub struct VaultKey {
+    dek: Key32,
+    header: [u8; OFF_VAULT_NONCE],
+}
+
+impl VaultKey {
+    fn new(dek: Key32, header: &[u8; HEADER_LEN]) -> Self {
+        let mut prefix = [0u8; OFF_VAULT_NONCE];
+        for (dst, src) in prefix.iter_mut().zip(header.iter()) {
+            *dst = *src;
+        }
+        VaultKey {
+            dek,
+            header: prefix,
+        }
+    }
+
+    /// Vero se `file` è stato scritto con questa chiave: stessi parametri KDF,
+    /// salt e DEK cifrata. Un cambio password o un nuovo `seal` lo rendono falso.
+    pub fn matches(&self, file: &[u8]) -> bool {
+        file.get(..OFF_VAULT_NONCE) == Some(self.header.as_slice())
+    }
+}
+
 pub fn seal(password: &[u8], plaintext: &[u8], params: KdfParams) -> Result<Vec<u8>, VaultError> {
+    seal_with_key(password, plaintext, params).map(|(_, file)| file)
+}
+
+/// Come [`seal`], ma restituisce anche la chiave per ricifrare con [`reseal`].
+pub fn seal_with_key(
+    password: &[u8],
+    plaintext: &[u8],
+    params: KdfParams,
+) -> Result<(VaultKey, Vec<u8>), VaultError> {
     let dek = Key32::random()?;
     let vault_nonce = random_array()?;
     let header = wrap_dek(password, &dek, params, vault_nonce)?;
-    let ciphertext = encrypt(&dek, &vault_nonce, &vault_aad(&header), plaintext)?;
+    let file = assemble(&header, &dek, &vault_nonce, plaintext)?;
+    Ok((VaultKey::new(dek, &header), file))
+}
 
+/// Ricifra il vault con la DEK già sbloccata: header invariato fino a
+/// wrapped_dek, vault_nonce nuovo da `OsRng`. Nessuna derivazione.
+pub fn reseal(key: &VaultKey, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    let vault_nonce: [u8; NONCE_LEN] = random_array()?;
+    let mut header = [0u8; HEADER_LEN];
+    for (dst, src) in header
+        .iter_mut()
+        .zip(key.header.iter().chain(vault_nonce.iter()))
+    {
+        *dst = *src;
+    }
+    assemble(&header, &key.dek, &vault_nonce, plaintext)
+}
+
+/// `header ++ ciphertext`: il vault cifrato dalla DEK sotto l'AAD del vault.
+fn assemble(
+    header: &[u8; HEADER_LEN],
+    dek: &Key32,
+    vault_nonce: &[u8; NONCE_LEN],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, VaultError> {
+    let ciphertext = encrypt(dek, vault_nonce, &vault_aad(header), plaintext)?;
     let mut file = Vec::with_capacity(HEADER_LEN + ciphertext.len());
-    file.extend_from_slice(&header);
+    file.extend_from_slice(header);
     file.extend_from_slice(&ciphertext);
     Ok(file)
 }
 
 pub fn open(password: &[u8], file: &[u8]) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+    open_with_key(password, file).map(|(_, plaintext)| plaintext)
+}
+
+/// Come [`open`], ma restituisce anche la chiave per ricifrare con [`reseal`].
+pub fn open_with_key(
+    password: &[u8],
+    file: &[u8],
+) -> Result<(VaultKey, Zeroizing<Vec<u8>>), VaultError> {
     let (header, ciphertext) = Header::parse(file)?;
     let header_bytes = raw_header(file)?;
     let dek = unwrap_dek(password, &header, header_bytes)?;
-    decrypt(&dek, &header.vault_nonce, &vault_aad(header_bytes), ciphertext)
+    let plaintext = decrypt(&dek, &header.vault_nonce, &vault_aad(header_bytes), ciphertext)?;
+    Ok((VaultKey::new(dek, header_bytes), plaintext))
 }
 
 pub fn change_master(
@@ -316,5 +388,51 @@ mod tests {
             ..FAST
         };
         assert!(matches!(seal(b"pw", b"x", params), Err(VaultError::Kdf(_))));
+    }
+
+    #[test]
+    fn reseal_keeps_key_header_and_draws_a_fresh_nonce() {
+        let (key, file) = seal_with_key(b"pw", b"first", FAST).unwrap();
+        let a = reseal(&key, b"second").unwrap();
+        let b = reseal(&key, b"second").unwrap();
+
+        assert_eq!(&a[..106], &file[..106]);
+        assert_eq!(&b[..106], &file[..106]);
+        assert_ne!(&a[106..130], &file[106..130]);
+        assert_ne!(&a[106..130], &b[106..130]);
+        assert_ne!(&a[130..], &b[130..]);
+        assert_eq!(open(b"pw", &a).unwrap().as_slice(), b"second");
+        assert!(key.matches(&a) && key.matches(&file));
+    }
+
+    #[test]
+    fn key_from_open_reseals_under_the_same_password() {
+        let file = seal(b"pw", b"secret", FAST).unwrap();
+        let (key, plaintext) = open_with_key(b"pw", &file).unwrap();
+        assert_eq!(plaintext.as_slice(), b"secret");
+
+        let resealed = reseal(&key, b"updated").unwrap();
+        assert_eq!(open(b"pw", &resealed).unwrap().as_slice(), b"updated");
+        assert!(matches!(open(b"other", &resealed), Err(VaultError::AuthFailed)));
+    }
+
+    #[test]
+    fn resealed_file_detects_tampering() {
+        let (key, _) = seal_with_key(b"pw", b"secret", FAST).unwrap();
+        let file = reseal(&key, b"secret").unwrap();
+        for offset in [0, 4, 5, 8, 20, 40, 80, 110, 129, 130, file.len() - 1] {
+            let mut bad = file.clone();
+            bad[offset] ^= 0x01;
+            assert!(open(b"pw", &bad).is_err(), "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn key_does_not_match_after_password_change_or_truncation() {
+        let (key, file) = seal_with_key(b"old", b"secret", FAST).unwrap();
+        let changed = change_master(b"old", b"new", &file, FAST).unwrap();
+        assert!(!key.matches(&changed));
+        assert!(!key.matches(&file[..50]));
+        assert!(!key.matches(&[]));
     }
 }

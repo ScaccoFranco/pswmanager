@@ -1,0 +1,10 @@
+[package]
+name = "pwdv-gui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pwdv-core.workspace = true
+arboard.workspace = true
+eframe.workspace = true
+zeroize.workspace = true

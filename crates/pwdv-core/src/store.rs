@@ -11,24 +11,51 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use zeroize::Zeroizing;
 
-use crate::crypto;
+use crate::crypto::{self, VaultKey};
 use crate::error::VaultError;
 use crate::format::KdfParams;
 use crate::vault::{VaultData, DATA_VERSION};
 
 pub fn load(path: &Path, password: &[u8]) -> Result<VaultData, VaultError> {
+    load_with_key(path, password).map(|(_, data)| data)
+}
+
+/// Come [`load`], ma restituisce anche la chiave per [`save_with_key`].
+pub fn load_with_key(path: &Path, password: &[u8]) -> Result<(VaultKey, VaultData), VaultError> {
     let file = fs::read(path)?;
-    let json = crypto::open(password, &file)?;
+    let (key, json) = crypto::open_with_key(password, &file)?;
     let data: VaultData = serde_json::from_slice(&json).map_err(|_| VaultError::Malformed)?;
     // Uno schema sconosciuto verrebbe troncato al primo salvataggio: meglio rifiutarlo.
     if data.version != DATA_VERSION {
         return Err(VaultError::Malformed);
     }
-    Ok(data)
+    Ok((key, data))
 }
 
 pub fn save(path: &Path, password: &[u8], data: &VaultData) -> Result<(), VaultError> {
     save_with_params(path, password, data, KdfParams::default())
+}
+
+/// Crea un vault in `path` e restituisce la chiave per [`save_with_key`].
+/// Non sostituisce un file esistente.
+pub fn create(path: &Path, password: &[u8], data: &VaultData) -> Result<VaultKey, VaultError> {
+    create_with_params(path, password, data, KdfParams::default())
+}
+
+/// Salva con la chiave del vault già aperto: niente password, niente Argon2.
+/// Se dopo l'apertura un altro programma ha riscritto il file con un'altra
+/// chiave (un cambio password, un salvataggio della CLI) restituisce
+/// `Conflict` senza scrivere: sovrascriverlo cancellerebbe quelle modifiche e,
+/// dopo un cambio password, riporterebbe in vita la password vecchia.
+pub fn save_with_key(path: &Path, key: &VaultKey, data: &VaultData) -> Result<(), VaultError> {
+    let json = to_json(data)?;
+    let file = crypto::reseal(key, &json)?;
+    let previous = fs::read(path)?;
+    if !key.matches(&previous) {
+        return Err(VaultError::Conflict);
+    }
+    write_atomic(&backup_path(path), &previous)?;
+    write_atomic(path, &file)
 }
 
 /// Cambia la master password ri-cifrando solo la DEK: il ciphertext del vault
@@ -48,6 +75,26 @@ fn save_with_params(
     let json = to_json(data)?;
     let file = crypto::seal(password, &json, params)?;
     replace(path, &file)
+}
+
+fn create_with_params(
+    path: &Path,
+    password: &[u8],
+    data: &VaultData,
+    params: KdfParams,
+) -> Result<VaultKey, VaultError> {
+    // Non atomico: un file creato tra il controllo e il rename verrebbe sostituito.
+    if path.try_exists()? {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a file already exists at this path",
+        )
+        .into());
+    }
+    let json = to_json(data)?;
+    let (key, file) = crypto::seal_with_key(password, &json, params)?;
+    write_atomic(path, &file)?;
+    Ok(key)
 }
 
 fn change_password_with_params(
@@ -345,5 +392,52 @@ mod tests {
         let refs: Vec<&str> = many.iter().map(String::as_str).collect();
         let json = to_json(&data(&refs)).unwrap();
         assert_eq!(json.capacity(), json.len());
+    }
+
+    #[test]
+    fn save_with_key_keeps_the_key_header_and_backs_up() {
+        let dir = TempDir::new("withkey");
+        let vault = dir.vault();
+        let key = create_with_params(&vault, b"pw", &data(&["first"]), FAST).unwrap();
+        let created = fs::read(&vault).unwrap();
+
+        save_with_key(&vault, &key, &data(&["first", "second"])).unwrap();
+        let saved = fs::read(&vault).unwrap();
+
+        assert_eq!(&saved[..106], &created[..106]);
+        assert_ne!(&saved[106..130], &created[106..130]);
+        assert_eq!(fs::read(backup_path(&vault)).unwrap(), created);
+        assert_eq!(passwords(&load(&vault, b"pw").unwrap()), ["first", "second"]);
+
+        let (reopened, loaded) = load_with_key(&vault, b"pw").unwrap();
+        assert_eq!(passwords(&loaded), ["first", "second"]);
+        save_with_key(&vault, &reopened, &data(&["third"])).unwrap();
+        assert_eq!(passwords(&load(&vault, b"pw").unwrap()), ["third"]);
+    }
+
+    #[test]
+    fn save_with_key_refuses_a_file_rewritten_with_another_key() {
+        let dir = TempDir::new("conflict");
+        let vault = dir.vault();
+        let key = create_with_params(&vault, b"old", &data(&["a"]), FAST).unwrap();
+        change_password_with_params(&vault, b"old", b"new", FAST).unwrap();
+        let before = fs::read(&vault).unwrap();
+
+        let result = save_with_key(&vault, &key, &data(&["b"]));
+        assert!(matches!(result, Err(VaultError::Conflict)));
+        assert_eq!(fs::read(&vault).unwrap(), before);
+        assert_eq!(passwords(&load(&vault, b"new").unwrap()), ["a"]);
+        assert_eq!(dir.listing(), ["vault.pwdv"]);
+    }
+
+    #[test]
+    fn create_refuses_an_existing_file() {
+        let dir = TempDir::new("create-exists");
+        let vault = dir.vault();
+        fs::write(&vault, b"not a vault").unwrap();
+
+        let result = create_with_params(&vault, b"pw", &data(&[]), FAST);
+        assert!(matches!(result, Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists));
+        assert_eq!(fs::read(&vault).unwrap(), b"not a vault");
     }
 }
