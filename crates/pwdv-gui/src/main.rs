@@ -4,6 +4,7 @@ mod app;
 mod main_view;
 mod security;
 mod unlock;
+mod window;
 mod worker;
 
 use eframe::egui;
@@ -12,9 +13,13 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("pwdv")
+            // Deve coincidere con `StartupWMClass` in packaging/linux/pwdv.desktop.in.
+            .with_app_id("pwdv")
             .with_inner_size([1000.0, 680.0])
             .with_min_inner_size([720.0, 480.0])
-            .with_icon(placeholder_icon()),
+            .with_icon(bug_icon())
+            // Barra del titolo e bordi sono disegnati da `window`.
+            .with_decorations(false),
         // Già escluso dalla feature `persistence` disabilitata; esplicito per sicurezza.
         persist_window: false,
         ..Default::default()
@@ -26,25 +31,49 @@ fn main() -> eframe::Result {
     )
 }
 
-/// Icona provvisoria generata a runtime: quadrato blu con un cerchio chiaro.
-fn placeholder_icon() -> egui::IconData {
-    const SIZE: u32 = 64;
-    const CENTER: f32 = (SIZE as f32 - 1.0) / 2.0;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let (dx, dy) = (x as f32 - CENTER, y as f32 - CENTER);
-            let pixel = if dx.hypot(dy) < 14.0 {
-                [0xf2, 0xf4, 0xf8, 0xff]
-            } else {
-                [0x3b, 0x6e, 0xd8, 0xff]
-            };
-            rgba.extend_from_slice(&pixel);
+/// Icona in pixel art: un insetto nero su fondo grigio. Stessa griglia di
+/// `packaging/linux/pwdv.svg`, usata dai launcher tramite il file `.desktop`.
+const BUG_PIXELS: [&str; 16] = [
+    "................",
+    "....#......#....",
+    ".....#....#.....",
+    "......####......",
+    ".....######.....",
+    ".#..########..#.",
+    "..#.##.##.##.#..",
+    "...##########...",
+    ".#..########..#.",
+    "..#.##.##.##.#..",
+    "...##########...",
+    "....########....",
+    "...#.######.#...",
+    "..#...####...#..",
+    "................",
+    "................",
+];
+
+/// Lato in pixel reali di ogni pixel della griglia.
+const BUG_SCALE: usize = 8;
+
+/// Icona della finestra (usata su X11; su Wayland conta quella del `.desktop`).
+fn bug_icon() -> egui::IconData {
+    const BLACK: [u8; 4] = [0x00, 0x00, 0x00, 0xff];
+    const GRAY: [u8; 4] = [0x9a, 0x9a, 0x9a, 0xff];
+    let side = BUG_PIXELS.len() * BUG_SCALE;
+    let mut rgba = Vec::with_capacity(side * side * 4);
+    for row in BUG_PIXELS {
+        for _ in 0..BUG_SCALE {
+            for cell in row.bytes() {
+                let pixel = if cell == b'#' { BLACK } else { GRAY };
+                for _ in 0..BUG_SCALE {
+                    rgba.extend_from_slice(&pixel);
+                }
+            }
         }
     }
     egui::IconData {
         rgba,
-        width: SIZE,
-        height: SIZE,
+        width: side as u32,
+        height: side as u32,
     }
 }

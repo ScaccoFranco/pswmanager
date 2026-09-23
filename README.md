@@ -267,6 +267,20 @@ cargo install --path crates/pwdv-gui   # installa `pwdv-gui`
 
 I binari finiscono in `~/.cargo/bin`, che rustup aggiunge normalmente al `PATH`.
 
+### Installazione nel menu delle applicazioni
+
+Per far comparire pwdv nel launcher del desktop (GNOME, KDE, Walker, rofi, …):
+
+```sh
+./install.sh      # compila in release e installa in ~/.local
+./uninstall.sh    # rimuove binari, voce di menu e icona (i vault restano)
+```
+
+Lo script installa `pwdv` e `pwdv-gui` in `~/.local/bin`, la voce di menu in
+`~/.local/share/applications/pwdv.desktop` e l'icona in
+`~/.local/share/icons/hicolor/scalable/apps/pwdv.svg`. Per un'altra destinazione:
+`PREFIX=/percorso ./install.sh` (e lo stesso `PREFIX` per `uninstall.sh`).
+
 ---
 
 ## 5. Tutorial: interfaccia grafica

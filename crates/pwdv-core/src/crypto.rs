@@ -52,13 +52,24 @@ pub fn derive_kek(
 
 /// `hash_password_into` libera la matrice di Argon2 senza azzerarla, e dai
 /// blocchi finali si ricalcola l'output: la allochiamo noi, azzerata al drop.
+///
+/// `vec![]` aborta il processo quando l'allocazione fallisce, e `block_count`
+/// dipende da `m_cost`, che arriva dall'header in chiaro prima di qualsiasi
+/// verifica: la memoria si riserva con `try_reserve_exact`, così un file che
+/// ne chiede più di quanta ce n'è diventa `Err` invece di uccidere il processo.
 fn hash_into(
     argon2: &Argon2<'_>,
     password: &[u8],
     salt: &[u8],
     out: &mut [u8],
 ) -> Result<(), VaultError> {
-    let mut memory = Zeroizing::new(vec![Block::default(); argon2.params().block_count()]);
+    let blocks = argon2.params().block_count();
+    let mut memory: Zeroizing<Vec<Block>> = Zeroizing::new(Vec::new());
+    memory
+        .try_reserve_exact(blocks)
+        .map_err(|_| VaultError::Kdf("not enough memory for these KDF parameters".into()))?;
+    // La capacità è già riservata: `resize` non rialloca, quindi non può abortire.
+    memory.resize(blocks, Block::default());
     argon2
         .hash_password_into_with_memory(password, salt, out, memory.as_mut_slice())
         .map_err(|e| VaultError::Kdf(e.to_string()))

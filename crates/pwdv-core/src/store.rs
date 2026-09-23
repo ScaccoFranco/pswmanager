@@ -1,6 +1,8 @@
 //! Lettura e scrittura del vault su disco. Ogni scrittura è atomica (file
 //! temporaneo nella stessa directory, `sync_all`, `rename`) e il file
-//! precedente viene conservato in `<vault>.bak`.
+//! precedente viene conservato in `<vault>.bak`. La creazione usa `hard_link`
+//! al posto del `rename`: fallisce se il percorso è già occupato, così non può
+//! sostituire un vault comparso nel frattempo.
 
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
@@ -37,7 +39,7 @@ pub fn save(path: &Path, password: &[u8], data: &VaultData) -> Result<(), VaultE
 }
 
 /// Crea un vault in `path` e restituisce la chiave per [`save_with_key`].
-/// Non sostituisce un file esistente.
+/// Non sostituisce un file esistente, nemmeno se compare mentre Argon2 lavora.
 pub fn create(path: &Path, password: &[u8], data: &VaultData) -> Result<VaultKey, VaultError> {
     create_with_params(path, password, data, KdfParams::default())
 }
@@ -83,17 +85,14 @@ fn create_with_params(
     data: &VaultData,
     params: KdfParams,
 ) -> Result<VaultKey, VaultError> {
-    // Non atomico: un file creato tra il controllo e il rename verrebbe sostituito.
+    // Solo per evitare la derivazione Argon2 quando il file c'è già: a
+    // garantire che non venga sostituito è `write_new`, non questo controllo.
     if path.try_exists()? {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "a file already exists at this path",
-        )
-        .into());
+        return Err(already_exists().into());
     }
     let json = to_json(data)?;
     let (key, file) = crypto::seal_with_key(password, &json, params)?;
-    write_atomic(path, &file)?;
+    write_new(path, &file)?;
     Ok(key)
 }
 
@@ -167,6 +166,51 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
         let _ = fs::remove_file(&tmp);
     }
     Ok(result?)
+}
+
+/// Come [`write_atomic`], ma non sostituisce mai un file esistente: il
+/// temporaneo viene agganciato al percorso finale con `hard_link`, che
+/// fallisce se il percorso è già occupato. Controllo di esistenza e creazione
+/// sono così una sola operazione atomica, senza la finestra fra i due che il
+/// `rename` lascerebbe aperta mentre Argon2 lavora.
+fn write_new(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
+    let tmp = temp_path(path)?;
+    let result = write_then_link(&tmp, path, bytes);
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    Ok(result?)
+}
+
+fn write_then_link(tmp: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = create_private(tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    match fs::hard_link(tmp, path) {
+        // Il vault esiste da qui: togliere il temporaneo è solo pulizia e non
+        // deve far fallire una creazione già riuscita.
+        Ok(()) => {
+            let _ = fs::remove_file(tmp);
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Err(e),
+        // Filesystem senza hard link (FAT, certi mount di rete): si ricade sul
+        // rename, che resta esposto alla corsa. Meglio che non poter creare.
+        Err(_) => {
+            if path.try_exists()? {
+                return Err(already_exists());
+            }
+            fs::rename(tmp, path)?;
+        }
+    }
+    sync_parent_dir(path)
+}
+
+fn already_exists() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "a file already exists at this path",
+    )
 }
 
 fn write_then_rename(tmp: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -428,6 +472,43 @@ mod tests {
         assert_eq!(fs::read(&vault).unwrap(), before);
         assert_eq!(passwords(&load(&vault, b"new").unwrap()), ["a"]);
         assert_eq!(dir.listing(), ["vault.pwdv"]);
+    }
+
+    /// Il controllo iniziale di `create` non basta: mentre Argon2 lavora un
+    /// altro processo può creare il file. A proteggerlo è il link atomico, che
+    /// qui si verifica saltando il controllo e chiamando `write_new` diretto.
+    #[test]
+    fn write_new_refuses_a_path_that_appeared_after_the_check() {
+        let dir = TempDir::new("create-race");
+        let vault = dir.vault();
+        fs::write(&vault, b"creato da un altro processo").unwrap();
+
+        let result = write_new(&vault, b"nuovo vault");
+        assert!(
+            matches!(result, Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists)
+        );
+        assert_eq!(fs::read(&vault).unwrap(), b"creato da un altro processo");
+        assert_eq!(dir.listing(), ["vault.pwdv"], "nessun temporaneo lasciato indietro");
+    }
+
+    /// Su un percorso libero `write_new` si comporta come `write_atomic`:
+    /// stesso contenuto, stessi permessi, nessun temporaneo residuo.
+    #[test]
+    fn write_new_creates_the_file_when_the_path_is_free() {
+        let dir = TempDir::new("create-free");
+        let vault = dir.vault();
+        write_new(&vault, b"nuovo vault").unwrap();
+
+        assert_eq!(fs::read(&vault).unwrap(), b"nuovo vault");
+        assert_eq!(dir.listing(), ["vault.pwdv"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let mode = fs::metadata(&vault).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+            // Il link temporaneo è stato rimosso: resta un solo nome.
+            assert_eq!(fs::metadata(&vault).unwrap().nlink(), 1);
+        }
     }
 
     #[test]

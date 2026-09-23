@@ -105,10 +105,16 @@ mod tests {
         let dir = TempDir::new("roundtrip");
         let path = dir.vault();
 
-        let (_, created) = spawn_create(path.clone(), pw("correct horse")).recv().unwrap().unwrap();
+        let (_, created) = spawn_create(path.clone(), pw("correct horse"))
+            .recv()
+            .unwrap()
+            .unwrap();
         assert!(created.entries.is_empty());
 
-        let (_, opened) = spawn_unlock(path.clone(), pw("correct horse")).recv().unwrap().unwrap();
+        let (_, opened) = spawn_unlock(path.clone(), pw("correct horse"))
+            .recv()
+            .unwrap()
+            .unwrap();
         assert!(opened.entries.is_empty());
 
         let wrong = spawn_unlock(path, pw("wrong")).recv().unwrap();
@@ -122,7 +128,9 @@ mod tests {
         fs::write(&path, b"not a vault").unwrap();
 
         let result = spawn_create(path.clone(), pw("pw")).recv().unwrap();
-        assert!(matches!(result, Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists));
+        assert!(
+            matches!(result, Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists)
+        );
         assert_eq!(fs::read(&path).unwrap(), b"not a vault");
     }
 }

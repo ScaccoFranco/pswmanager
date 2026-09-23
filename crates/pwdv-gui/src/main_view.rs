@@ -22,8 +22,18 @@ const REVEAL_FOR: Duration = Duration::from_secs(10);
 /// Sempre lo stesso numero di pallini: la lunghezza della password non trapela.
 const MASK: &str = "••••••••••";
 const PASSWORD_ID: &str = "pwdv-entry-password";
+/// Limiti dei campi non-password della bozza. Come per la password, servono a
+/// tenere ogni buffer entro la capacità riservata in `Draft::empty`: una
+/// `String` che cresce rialloca e libera il buffer vecchio senza azzerarlo, e
+/// username, url e note sono azzerati al drop come il resto della voce.
+const MAX_FIELD_CHARS: usize = 256;
+const MAX_NOTES_CHARS: usize = 2048;
+/// 4 byte coprono qualunque carattere UTF-8.
+const FIELD_CAPACITY: usize = MAX_FIELD_CHARS * 4;
+const NOTES_CAPACITY: usize = MAX_NOTES_CHARS * 4;
 /// Cosa pwdv può e non può garantire sul clipboard (vedi il report dello step 8).
-const CLIPBOARD_NOTE: &str = "Il clipboard viene svuotato allo scadere, al blocco e alla chiusura, \
+const CLIPBOARD_NOTE: &str =
+    "Il clipboard viene svuotato allo scadere, al blocco e alla chiusura, \
      solo se contiene ancora il valore copiato. La copia è marcata come da non conservare \
      nella cronologia degli appunti, ma pwdv non può controllare i programmi che ignorano \
      questa indicazione.";
@@ -172,11 +182,11 @@ struct Draft {
 impl Draft {
     fn empty() -> Self {
         Draft {
-            name: String::new(),
-            username: String::new(),
+            name: String::with_capacity(FIELD_CAPACITY),
+            username: String::with_capacity(FIELD_CAPACITY),
             password: String::with_capacity(PASSWORD_CAPACITY),
-            url: String::new(),
-            notes: String::new(),
+            url: String::with_capacity(FIELD_CAPACITY),
+            notes: String::with_capacity(NOTES_CAPACITY),
         }
     }
 
@@ -186,14 +196,22 @@ impl Draft {
         draft.username.push_str(&entry.username);
         draft.password.push_str(&entry.password);
         draft.url.push_str(entry.url.as_deref().unwrap_or_default());
-        draft.notes.push_str(entry.notes.as_deref().unwrap_or_default());
+        draft
+            .notes
+            .push_str(entry.notes.as_deref().unwrap_or_default());
         draft
     }
 
     fn is_blank(&self) -> bool {
-        [&self.name, &self.username, &self.password, &self.url, &self.notes]
-            .iter()
-            .all(|field| field.is_empty())
+        [
+            &self.name,
+            &self.username,
+            &self.password,
+            &self.url,
+            &self.notes,
+        ]
+        .iter()
+        .all(|field| field.is_empty())
     }
 
     fn differs_from(&self, entry: &Entry) -> bool {
@@ -298,10 +316,23 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, clipboard: &mut Clipboard,
         error: session.view.copy_error.clone(),
     };
     egui::CentralPanel::default().show(ui, |ui| {
-        detail_panel(ui, &mut session.view, &session.data.entries, now.instant, &copy, &mut action);
+        detail_panel(
+            ui,
+            &mut session.view,
+            &session.data.entries,
+            now.instant,
+            &copy,
+            &mut action,
+        );
     });
     if let Some(dialog) = &mut session.view.delete {
-        delete_dialog(&ctx, dialog, &session.data.entries, &mut session.view.focus, &mut action);
+        delete_dialog(
+            &ctx,
+            dialog,
+            &session.data.entries,
+            &mut session.view.focus,
+            &mut action,
+        );
     }
 
     apply(action, session, clipboard, &ctx, now);
@@ -349,7 +380,11 @@ fn apply(
             session.view.focus = Some(Focus::Name);
         }
         Action::Edit => {
-            if let Some(entry) = session.view.selected.and_then(|i| session.data.entries.get(i)) {
+            if let Some(entry) = session
+                .view
+                .selected
+                .and_then(|i| session.data.entries.get(i))
+            {
                 session.view.mode = Mode::Edit(Draft::of(entry));
                 session.view.hide();
                 session.view.focus = Some(Focus::Name);
@@ -458,7 +493,10 @@ fn persist(session: &mut Session) {
 fn list_panel(ui: &mut egui::Ui, view: &mut MainView, entries: &[Entry], action: &mut Action) {
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
         ui.add_space(8.0);
-        let new = ui.add_sized([ui.available_width(), 28.0], egui::Button::new("Nuova voce"));
+        let new = ui.add_sized(
+            [ui.available_width(), 28.0],
+            egui::Button::new("Nuova voce"),
+        );
         if new.clicked() {
             *action = Action::New;
         }
@@ -510,7 +548,12 @@ fn entry_row(ui: &mut egui::Ui, entry: &Entry, selected: bool) -> egui::Response
     let size = egui::vec2(ui.available_width(), ROW_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &entry.name)
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            true,
+            selected,
+            &entry.name,
+        )
     });
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact_selectable(&response, selected);
@@ -551,7 +594,15 @@ fn detail_panel(
     match &mut view.mode {
         Mode::New(draft) => edit_form(ui, draft, entries, None, revealed, &mut view.focus, action),
         Mode::Edit(draft) => {
-            edit_form(ui, draft, entries, selected, revealed, &mut view.focus, action);
+            edit_form(
+                ui,
+                draft,
+                entries,
+                selected,
+                revealed,
+                &mut view.focus,
+                action,
+            );
         }
         Mode::View => match selected.and_then(|i| entries.get(i)) {
             Some(entry) => entry_details(ui, entry, revealed, copy, action),
@@ -661,14 +712,22 @@ fn edit_form(
         .spacing([16.0, 8.0])
         .show(ui, |ui| {
             ui.label("Nome");
-            let name = ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(FIELD_WIDTH));
+            let name = ui.add(
+                egui::TextEdit::singleline(&mut draft.name)
+                    .char_limit(MAX_FIELD_CHARS)
+                    .desired_width(FIELD_WIDTH),
+            );
             if take_focus(focus, Focus::Name) {
                 name.request_focus();
             }
             ui.end_row();
 
             ui.label("Username");
-            ui.add(egui::TextEdit::singleline(&mut draft.username).desired_width(FIELD_WIDTH));
+            ui.add(
+                egui::TextEdit::singleline(&mut draft.username)
+                    .char_limit(MAX_FIELD_CHARS)
+                    .desired_width(FIELD_WIDTH),
+            );
             ui.end_row();
 
             ui.label("Password");
@@ -685,12 +744,17 @@ fn edit_form(
             ui.end_row();
 
             ui.label("URL");
-            ui.add(egui::TextEdit::singleline(&mut draft.url).desired_width(FIELD_WIDTH));
+            ui.add(
+                egui::TextEdit::singleline(&mut draft.url)
+                    .char_limit(MAX_FIELD_CHARS)
+                    .desired_width(FIELD_WIDTH),
+            );
             ui.end_row();
 
             ui.label("Note");
             ui.add(
                 egui::TextEdit::multiline(&mut draft.notes)
+                    .char_limit(MAX_NOTES_CHARS)
                     .desired_rows(4)
                     .desired_width(FIELD_WIDTH),
             );
@@ -699,7 +763,9 @@ fn edit_form(
 
     ui.add_space(12.0);
     let changed = match editing {
-        Some(index) => entries.get(index).is_some_and(|entry| draft.differs_from(entry)),
+        Some(index) => entries
+            .get(index)
+            .is_some_and(|entry| draft.differs_from(entry)),
         None => !draft.is_blank(),
     };
     let problem = draft.problem(entries, editing);
@@ -790,7 +856,8 @@ fn delete_dialog(
             entry.name
         ));
         ui.add_space(8.0);
-        let field = ui.add(egui::TextEdit::singleline(&mut dialog.typed).desired_width(f32::INFINITY));
+        let field =
+            ui.add(egui::TextEdit::singleline(&mut dialog.typed).desired_width(f32::INFINITY));
         if take_focus(focus, Focus::DeleteConfirm) {
             field.request_focus();
         }
@@ -983,8 +1050,14 @@ mod tests {
         assert!(matches("rossi", &github));
         assert!(matches("hub.com", &github));
         assert!(matches("git rossi", &github));
-        assert!(!matches("bhtg", &github), "le lettere devono essere in ordine");
-        assert!(!matches("git bianchi", &github), "ogni parola deve comparire");
+        assert!(
+            !matches("bhtg", &github),
+            "le lettere devono essere in ordine"
+        );
+        assert!(
+            !matches("git bianchi", &github),
+            "ogni parola deve comparire"
+        );
     }
 
     #[test]
@@ -1025,15 +1098,41 @@ mod tests {
         }
     }
 
+    /// Ogni campo della bozza resta nel buffer riservato da `Draft::empty` fino
+    /// al proprio limite di caratteri: senza riallocazione nessuna copia del
+    /// testo viene liberata senza essere azzerata.
+    #[test]
+    fn draft_buffers_do_not_reallocate_up_to_their_limits() {
+        let mut draft = Draft::empty();
+        // '𝄞' occupa 4 byte: il caso peggiore per la capacità riservata.
+        for (field, limit) in [
+            (&mut draft.name, MAX_FIELD_CHARS),
+            (&mut draft.username, MAX_FIELD_CHARS),
+            (&mut draft.url, MAX_FIELD_CHARS),
+            (&mut draft.notes, MAX_NOTES_CHARS),
+            (&mut draft.password, MAX_PASSWORD_CHARS),
+        ] {
+            let before = field.as_ptr();
+            field.extend(std::iter::repeat_n('\u{1d11e}', limit));
+            assert_eq!(field.as_ptr(), before, "riallocato a {limit} caratteri");
+        }
+    }
+
     #[test]
     fn draft_validation() {
         let entries = vec![entry("GitHub", "u", None), entry("Posta", "u", None)];
         let mut draft = Draft::empty();
         assert!(draft.is_blank());
-        assert_eq!(draft.problem(&entries, None), Some("Il nome è obbligatorio."));
+        assert_eq!(
+            draft.problem(&entries, None),
+            Some("Il nome è obbligatorio.")
+        );
 
         draft.name.push_str("  Posta ");
-        assert_eq!(draft.problem(&entries, None), Some("Esiste già una voce con questo nome."));
+        assert_eq!(
+            draft.problem(&entries, None),
+            Some("Esiste già una voce con questo nome.")
+        );
         assert_eq!(
             draft.problem(&entries, Some(1)),
             Some("La password è obbligatoria."),
@@ -1078,9 +1177,19 @@ mod tests {
         let failed = session.view.save_error.is_some();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
 
-        assert!(failed, "la directory in sola lettura deve far fallire il salvataggio");
-        assert_eq!(session.data.entries.len(), 1, "la modifica resta in memoria");
-        assert!(store::load(&session.path, b"pw").unwrap().entries.is_empty());
+        assert!(
+            failed,
+            "la directory in sola lettura deve far fallire il salvataggio"
+        );
+        assert_eq!(
+            session.data.entries.len(),
+            1,
+            "la modifica resta in memoria"
+        );
+        assert!(store::load(&session.path, b"pw")
+            .unwrap()
+            .entries
+            .is_empty());
 
         apply(Action::Retry, &mut session, &mut clipboard, &ctx, now);
         assert!(session.view.save_error.is_none());

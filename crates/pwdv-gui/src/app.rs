@@ -14,6 +14,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::main_view::{self, MainView};
 use crate::security::{self, Clipboard, IdleTimer, Now};
 use crate::unlock::{self, FormAction, PasswordForm};
+use crate::window;
 use crate::worker::{self, Outcome};
 
 const LOCK_SHORTCUT: egui::KeyboardShortcut =
@@ -180,7 +181,8 @@ impl PwdvApp {
             }
             Err(TryRecvError::Disconnected) => {
                 self.pending = None;
-                self.state = AppState::Error("L'operazione si è interrotta in modo inatteso.".into());
+                self.state =
+                    AppState::Error("L'operazione si è interrotta in modo inatteso.".into());
                 self.form.reset(ctx);
                 return;
             }
@@ -305,6 +307,8 @@ impl eframe::App for PwdvApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        window::resize_edges(&ctx);
+        window::title_bar(ui);
         if matches!(self.state, AppState::Unlocked(_)) {
             self.unlocked_ui(ui, &ctx);
             return;
@@ -394,7 +398,9 @@ fn welcome_screen(ui: &mut egui::Ui, path_input: &mut String, focus: &mut bool) 
         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let can_open = !path_input.trim().is_empty();
         ui.add_space(8.0);
-        let clicked = ui.add_enabled(can_open, egui::Button::new("Apri")).clicked();
+        let clicked = ui
+            .add_enabled(can_open, egui::Button::new("Apri"))
+            .clicked();
         if can_open && (enter || clicked) {
             nav = Nav::Open;
         }

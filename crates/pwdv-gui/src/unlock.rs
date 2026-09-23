@@ -268,7 +268,10 @@ pub fn create_screen(
         }
 
         ui.add_space(16.0);
-        if ui.add_enabled(!busy, egui::Button::new("Indietro")).clicked() {
+        if ui
+            .add_enabled(!busy, egui::Button::new("Indietro"))
+            .clicked()
+        {
             action = FormAction::Back;
         }
     });
@@ -324,8 +327,22 @@ mod tests {
 
     #[test]
     fn retry_delay_starts_at_the_third_failure_and_caps_at_four_seconds() {
-        let secs: Vec<Option<u64>> = (0..8).map(|n| retry_delay(n).map(|d| d.as_secs())).collect();
-        assert_eq!(secs, [None, None, None, Some(1), Some(2), Some(4), Some(4), Some(4)]);
+        let secs: Vec<Option<u64>> = (0..8)
+            .map(|n| retry_delay(n).map(|d| d.as_secs()))
+            .collect();
+        assert_eq!(
+            secs,
+            [
+                None,
+                None,
+                None,
+                Some(1),
+                Some(2),
+                Some(4),
+                Some(4),
+                Some(4)
+            ]
+        );
         assert_eq!(retry_delay(u32::MAX), Some(Duration::from_secs(4)));
     }
 
@@ -347,7 +364,10 @@ mod tests {
         assert_eq!(form.retry_remaining(now), Some(Duration::from_secs(2)));
 
         form.reset(&ctx);
-        assert_eq!(form.failures, 4, "cambiare schermata non azzera i tentativi");
+        assert_eq!(
+            form.failures, 4,
+            "cambiare schermata non azzera i tentativi"
+        );
 
         form.succeeded(&ctx);
         assert_eq!(form.failures, 0);
@@ -372,7 +392,8 @@ mod tests {
     fn buffer_does_not_reallocate_up_to_the_char_limit() {
         let mut form = PasswordForm::default();
         let before = form.password.as_ptr();
-        form.password.extend(std::iter::repeat_n('𝄞', MAX_PASSWORD_CHARS));
+        form.password
+            .extend(std::iter::repeat_n('𝄞', MAX_PASSWORD_CHARS));
         assert_eq!(form.password.as_ptr(), before);
     }
 }

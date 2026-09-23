@@ -232,7 +232,9 @@ impl Clipboard {
 
     /// Tempo alla cancellazione dell'ultimo valore copiato, se ce n'è uno.
     pub fn remaining(&self, now: Now) -> Option<Duration> {
-        self.pending.as_ref().map(|pending| pending.deadline.remaining(now))
+        self.pending
+            .as_ref()
+            .map(|pending| pending.deadline.remaining(now))
     }
 
     /// Da chiamare a ogni frame: alla scadenza svuota il clipboard.
@@ -371,7 +373,9 @@ mod tests {
         assert!(is_user_input(&Event::Copy));
         assert!(!is_user_input(&Event::WindowFocused(true)));
         assert!(!is_user_input(&Event::PointerGone));
-        assert!(!is_user_input(&Event::ModifiersChanged(egui::Modifiers::CTRL)));
+        assert!(!is_user_input(&Event::ModifiersChanged(
+            egui::Modifiers::CTRL
+        )));
     }
 
     #[test]
@@ -411,7 +415,10 @@ mod tests {
         fake.foreign_copy("indirizzo copiato dal browser");
 
         clipboard.tick(now.plus(20 * SEC));
-        assert_eq!(fake.content().as_deref(), Some("indirizzo copiato dal browser"));
+        assert_eq!(
+            fake.content().as_deref(),
+            Some("indirizzo copiato dal browser")
+        );
         assert_eq!(clipboard.remaining(now.plus(20 * SEC)), None);
     }
 

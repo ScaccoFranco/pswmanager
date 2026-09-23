@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=pwdv
+GenericName=Password Manager
+Comment=Vault di password locale cifrato
+Exec=@BINDIR@/pwdv-gui
+Icon=pwdv
+Terminal=false
+Categories=Utility;Security;
+Keywords=password;vault;cassaforte;
+StartupWMClass=pwdv
