@@ -11,12 +11,21 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::app::{self, Session};
 use crate::security::{Clipboard, Now};
+use crate::theme::{self, WideButton};
 use crate::unlock::{self, MAX_PASSWORD_CHARS, PASSWORD_CAPACITY};
 
 const LIST_WIDTH: f32 = 300.0;
 /// Larghezza dei campi del modulo: in una `Grid` la larghezza infinita non ha limite.
 const FIELD_WIDTH: f32 = 380.0;
-const ROW_HEIGHT: f32 = 40.0;
+const ROW_HEIGHT: f32 = 46.0;
+/// Larghezza fissa dei pulsanti d'azione: il testo cambia ("Nascondi (9 s)",
+/// "Copiato · 20 s") senza spostare il resto della riga.
+const ACTION_WIDTH: f32 = 110.0;
+/// Colonna delle etichette e altezza delle righe del riquadro di dettaglio.
+const LABEL_WIDTH: f32 = 96.0;
+const FIELD_ROW_HEIGHT: f32 = 32.0;
+/// Larghezza massima del contenuto del pannello di destra.
+const DETAIL_WIDTH: f32 = 620.0;
 /// Dopo quanto una password rivelata torna mascherata.
 const REVEAL_FOR: Duration = Duration::from_secs(10);
 /// Sempre lo stesso numero di pallini: la lunghezza della password non trapela.
@@ -273,25 +282,34 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, clipboard: &mut Clipboard,
     let mut action = Action::None;
 
     if let Some(error) = &session.view.save_error {
-        egui::Panel::top("pwdv-save-error").show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!("Salvataggio non riuscito. {error} Le modifiche sono solo in memoria."),
-                );
-                if ui.button("Riprova").clicked() {
-                    action = Action::Retry;
-                }
+        let banner = egui::Frame::new()
+            .fill(theme::DANGER_DIM)
+            .inner_margin(egui::Margin::symmetric(12, 6));
+        egui::Panel::top("pwdv-save-error")
+            .frame(banner)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(
+                        theme::DANGER,
+                        format!(
+                            "Salvataggio non riuscito. {error} Le modifiche sono solo in memoria."
+                        ),
+                    );
+                    if ui.add(theme::danger_button("Riprova")).clicked() {
+                        action = Action::Retry;
+                    }
+                });
             });
-            ui.add_space(4.0);
-        });
     }
 
     // Durante modifica ed eliminazione la lista è bloccata: niente cambi di
     // selezione con una bozza aperta.
     let list_enabled = matches!(session.view.mode, Mode::View) && session.view.delete.is_none();
+    let list_frame = egui::Frame::new()
+        .fill(theme::PANEL)
+        .inner_margin(egui::Margin::same(10));
     egui::Panel::left("pwdv-list")
+        .frame(list_frame)
         .resizable(true)
         .default_size(LIST_WIDTH)
         .size_range(220.0..=520.0)
@@ -315,16 +333,21 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, clipboard: &mut Clipboard,
             }),
         error: session.view.copy_error.clone(),
     };
-    egui::CentralPanel::default().show(ui, |ui| {
-        detail_panel(
-            ui,
-            &mut session.view,
-            &session.data.entries,
-            now.instant,
-            &copy,
-            &mut action,
-        );
-    });
+    let detail_frame = egui::Frame::new()
+        .fill(theme::BG)
+        .inner_margin(egui::Margin::symmetric(28, 20));
+    egui::CentralPanel::default()
+        .frame(detail_frame)
+        .show(ui, |ui| {
+            detail_panel(
+                ui,
+                &mut session.view,
+                &session.data.entries,
+                now.instant,
+                &copy,
+                &mut action,
+            );
+        });
     if let Some(dialog) = &mut session.view.delete {
         delete_dialog(
             &ctx,
@@ -492,21 +515,17 @@ fn persist(session: &mut Session) {
 
 fn list_panel(ui: &mut egui::Ui, view: &mut MainView, entries: &[Entry], action: &mut Action) {
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        ui.add_space(8.0);
-        let new = ui.add_sized(
-            [ui.available_width(), 28.0],
-            egui::Button::new("Nuova voce"),
-        );
+        let new = ui.add_wide(true, theme::primary_button("+  Nuova voce"));
         if new.clicked() {
             *action = Action::New;
         }
-        ui.add_space(8.0);
+        ui.add_space(2.0);
 
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-            ui.add_space(8.0);
             let search = ui.add(
                 egui::TextEdit::singleline(&mut view.query)
-                    .hint_text("Cerca")
+                    .hint_text("Cerca per nome, username o URL")
+                    .margin(unlock::FIELD_MARGIN)
                     .desired_width(f32::INFINITY),
             );
             if take_focus(&mut view.focus, Focus::Search) {
@@ -515,7 +534,13 @@ fn list_panel(ui: &mut egui::Ui, view: &mut MainView, entries: &[Entry], action:
             if search.changed() {
                 view.refresh(entries);
             }
-            ui.add_space(8.0);
+            let count = match (entries.len(), view.visible.len()) {
+                (1, 1) => "1 voce".to_owned(),
+                (all, shown) if all == shown => format!("{all} voci"),
+                (all, shown) => format!("{shown} di {all} voci"),
+            };
+            ui.add_space(4.0);
+            theme::field_label(ui, &count);
 
             if entries.is_empty() {
                 ui.weak("Nessuna voce.");
@@ -556,26 +581,49 @@ fn entry_row(ui: &mut egui::Ui, entry: &Entry, selected: bool) -> egui::Response
         )
     });
     if ui.is_rect_visible(rect) {
-        let visuals = ui.style().interact_selectable(&response, selected);
-        if selected || response.hovered() || response.has_focus() {
-            ui.painter()
-                .rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+        let painter = ui.painter();
+        let fill = if selected {
+            Some(theme::ACCENT_DIM)
+        } else if response.hovered() || response.has_focus() {
+            Some(theme::HOVER)
+        } else {
+            None
+        };
+        if let Some(fill) = fill {
+            painter.rect_filled(rect, egui::CornerRadius::ZERO, fill);
         }
-        let inner = rect.shrink2(egui::vec2(8.0, 4.0));
+        if selected || response.has_focus() {
+            let bar = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
+            let color = if selected {
+                theme::ACCENT_BRIGHT
+            } else {
+                theme::BORDER_STRONG
+            };
+            painter.rect_filled(bar, egui::CornerRadius::ZERO, color);
+        }
+        if selected && response.has_focus() {
+            let stroke = egui::Stroke::new(1.0, theme::ACCENT_BRIGHT);
+            painter.rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Inside);
+        }
+        let inner = rect.shrink2(egui::vec2(12.0, 6.0));
         let painter = ui.painter_at(inner);
         painter.text(
             inner.left_top(),
             egui::Align2::LEFT_TOP,
             &entry.name,
             egui::FontId::proportional(14.0),
-            visuals.text_color(),
+            if selected {
+                egui::Color32::WHITE
+            } else {
+                theme::TEXT
+            },
         );
         painter.text(
             inner.left_bottom(),
             egui::Align2::LEFT_BOTTOM,
             &entry.username,
             egui::FontId::proportional(12.0),
-            ui.visuals().weak_text_color(),
+            theme::TEXT_WEAK,
         );
     }
     response
@@ -619,73 +667,94 @@ fn entry_details(
     copy: &CopyState<'_>,
     action: &mut Action,
 ) {
+    ui.set_max_width(DETAIL_WIDTH);
     ui.horizontal(|ui| {
-        ui.heading(&entry.name);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Elimina").clicked() {
-                *action = Action::AskDelete;
-            }
-            if ui.button("Modifica").clicked() {
-                *action = Action::Edit;
-            }
-        });
+        let gap = ui.spacing().item_spacing.x;
+        let width = (ui.available_width() - 2.0 * (ACTION_WIDTH + gap)).max(0.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, theme::CONTROL_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_width(width);
+                ui.add(egui::Label::new(egui::RichText::new(&entry.name).heading()).truncate());
+            },
+        );
+        let edit = egui::Button::new("Modifica").min_size(egui::vec2(ACTION_WIDTH, 0.0));
+        if ui.add(edit).clicked() {
+            *action = Action::Edit;
+        }
+        let delete = theme::danger_button("Elimina").min_size(egui::vec2(ACTION_WIDTH, 0.0));
+        if ui.add(delete).clicked() {
+            *action = Action::AskDelete;
+        }
     });
-    ui.separator();
-    ui.add_space(4.0);
+    ui.add_space(12.0);
 
-    egui::Grid::new("pwdv-detail")
-        .num_columns(2)
-        .spacing([16.0, 10.0])
+    theme::card()
+        .inner_margin(egui::Margin::symmetric(20, 16))
         .show(ui, |ui| {
-            ui.weak("Username");
-            ui.horizontal(|ui| {
-                ui.label(or_dash(&entry.username));
+            ui.set_width(ui.available_width());
+            let username = egui::RichText::new(or_dash(&entry.username));
+            field_row(ui, "Username", username, true, 1, |ui| {
                 copy_button(ui, Copied::Username, copy, action);
             });
-            ui.end_row();
-
-            ui.weak("Password");
-            ui.horizontal(|ui| {
-                if revealed.is_some() {
-                    ui.monospace(&entry.password);
-                } else {
-                    ui.label(MASK);
-                }
+            ui.separator();
+            let password = if revealed.is_some() {
+                egui::RichText::new(&entry.password)
+            } else {
+                egui::RichText::new(MASK).color(theme::TEXT_WEAK)
+            };
+            field_row(ui, "Password", password.monospace(), false, 2, |ui| {
                 reveal_button(ui, revealed, action);
                 copy_button(ui, Copied::Password, copy, action);
             });
-            ui.end_row();
-
-            ui.weak("URL");
-            ui.label(or_dash(entry.url.as_deref().unwrap_or_default()));
-            ui.end_row();
-
-            ui.weak("Note");
-            ui.label(or_dash(entry.notes.as_deref().unwrap_or_default()));
-            ui.end_row();
-
-            ui.weak("Creata");
-            ui.label(format_timestamp(entry.created));
-            ui.end_row();
-
-            ui.weak("Modificata");
-            ui.label(format_timestamp(entry.modified));
-            ui.end_row();
+            ui.separator();
+            let url = egui::RichText::new(or_dash(entry.url.as_deref().unwrap_or_default()));
+            field_row(ui, "URL", url, true, 0, |_| {});
+            if let Some(notes) = entry.notes.as_deref().filter(|n| !n.is_empty()) {
+                ui.separator();
+                ui.horizontal_top(|ui| {
+                    row_label(ui, "Note");
+                    ui.vertical(|ui| {
+                        // Allinea la prima riga del testo al centro dell'etichetta.
+                        ui.add_space(
+                            (FIELD_ROW_HEIGHT - ui.text_style_height(&egui::TextStyle::Body)) / 2.0,
+                        );
+                        ui.label(notes);
+                    });
+                });
+            }
         });
 
-    ui.add_space(16.0);
-    ui.set_max_width(560.0);
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(format!(
+            "Creata {}  ·  Modificata {}",
+            format_timestamp(entry.created),
+            format_timestamp(entry.modified)
+        ))
+        .small()
+        .color(theme::TEXT_FAINT),
+    );
+
+    ui.add_space(12.0);
     if let Some(reason) = copy.unavailable {
-        ui.colored_label(
-            ui.visuals().warn_fg_color,
-            format!("Clipboard di sistema non disponibile ({reason}): i pulsanti Copia sono disattivati."),
+        theme::callout(
+            ui,
+            theme::WARN,
+            theme::WARN_DIM,
+            &format!("Clipboard di sistema non disponibile ({reason}): i pulsanti Copia sono disattivati."),
         );
     }
     if let Some(error) = &copy.error {
-        ui.colored_label(ui.visuals().error_fg_color, error);
+        theme::callout(ui, theme::DANGER, theme::DANGER_DIM, error);
     }
     if copy.pending.is_some() {
-        ui.weak(CLIPBOARD_NOTE);
+        ui.label(
+            egui::RichText::new(CLIPBOARD_NOTE)
+                .small()
+                .color(theme::TEXT_FAINT),
+        );
     }
 }
 
@@ -698,68 +767,56 @@ fn edit_form(
     focus: &mut Option<Focus>,
     action: &mut Action,
 ) {
-    ui.set_max_width(560.0);
+    ui.set_max_width(DETAIL_WIDTH);
     ui.heading(if editing.is_some() {
         "Modifica voce"
     } else {
         "Nuova voce"
     });
-    ui.separator();
-    ui.add_space(4.0);
+    ui.add_space(12.0);
 
-    egui::Grid::new("pwdv-edit")
-        .num_columns(2)
-        .spacing([16.0, 8.0])
-        .show(ui, |ui| {
-            ui.label("Nome");
-            let name = ui.add(
-                egui::TextEdit::singleline(&mut draft.name)
-                    .char_limit(MAX_FIELD_CHARS)
-                    .desired_width(FIELD_WIDTH),
-            );
-            if take_focus(focus, Focus::Name) {
-                name.request_focus();
-            }
-            ui.end_row();
+    theme::card().show(ui, |ui| {
+        ui.set_width(FIELD_WIDTH);
+        theme::field_label(ui, "Nome");
+        let name = ui.add(form_field(&mut draft.name));
+        if take_focus(focus, Focus::Name) {
+            name.request_focus();
+        }
+        ui.add_space(6.0);
 
-            ui.label("Username");
+        theme::field_label(ui, "Username");
+        ui.add(form_field(&mut draft.username));
+        ui.add_space(6.0);
+
+        theme::field_label(ui, "Password");
+        ui.horizontal(|ui| {
+            let reveal_width = ACTION_WIDTH;
             ui.add(
-                egui::TextEdit::singleline(&mut draft.username)
-                    .char_limit(MAX_FIELD_CHARS)
-                    .desired_width(FIELD_WIDTH),
+                egui::TextEdit::singleline(&mut draft.password)
+                    .id(egui::Id::new(PASSWORD_ID))
+                    .password(revealed.is_none())
+                    .char_limit(MAX_PASSWORD_CHARS)
+                    .font(egui::TextStyle::Monospace)
+                    .margin(unlock::FIELD_MARGIN)
+                    .desired_width(FIELD_WIDTH - reveal_width - ui.spacing().item_spacing.x),
             );
-            ui.end_row();
-
-            ui.label("Password");
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut draft.password)
-                        .id(egui::Id::new(PASSWORD_ID))
-                        .password(revealed.is_none())
-                        .char_limit(MAX_PASSWORD_CHARS)
-                        .desired_width(260.0),
-                );
-                reveal_button(ui, revealed, action);
-            });
-            ui.end_row();
-
-            ui.label("URL");
-            ui.add(
-                egui::TextEdit::singleline(&mut draft.url)
-                    .char_limit(MAX_FIELD_CHARS)
-                    .desired_width(FIELD_WIDTH),
-            );
-            ui.end_row();
-
-            ui.label("Note");
-            ui.add(
-                egui::TextEdit::multiline(&mut draft.notes)
-                    .char_limit(MAX_NOTES_CHARS)
-                    .desired_rows(4)
-                    .desired_width(FIELD_WIDTH),
-            );
-            ui.end_row();
+            reveal_button(ui, revealed, action);
         });
+        ui.add_space(6.0);
+
+        theme::field_label(ui, "URL");
+        ui.add(form_field(&mut draft.url));
+        ui.add_space(6.0);
+
+        theme::field_label(ui, "Note");
+        ui.add(
+            egui::TextEdit::multiline(&mut draft.notes)
+                .char_limit(MAX_NOTES_CHARS)
+                .desired_rows(4)
+                .margin(unlock::FIELD_MARGIN)
+                .desired_width(FIELD_WIDTH),
+        );
+    });
 
     ui.add_space(12.0);
     let changed = match editing {
@@ -770,7 +827,7 @@ fn edit_form(
     };
     let problem = draft.problem(entries, editing);
     ui.horizontal(|ui| {
-        let save = egui::Button::new("Salva");
+        let save = theme::primary_button("Salva").min_size(egui::vec2(96.0, 0.0));
         if ui.add_enabled(changed && problem.is_none(), save).clicked() {
             *action = Action::Save;
         }
@@ -794,21 +851,34 @@ fn reveal_button(ui: &mut egui::Ui, revealed: Option<Duration>, action: &mut Act
         Some(left) => format!("Nascondi ({} s)", left.as_millis().div_ceil(1000)),
         None => "Mostra".to_owned(),
     };
-    if ui.button(label).clicked() {
+    let button = egui::Button::new(label).min_size(egui::vec2(ACTION_WIDTH, 0.0));
+    if ui.add(button).clicked() {
         *action = Action::ToggleReveal;
     }
 }
 
 /// Pulsante "Copia" con il conto alla rovescia della cancellazione accanto.
 fn copy_button(ui: &mut egui::Ui, which: Copied, copy: &CopyState<'_>, action: &mut Action) {
-    let button = egui::Button::new("Copia");
-    if ui.add_enabled(copy.unavailable.is_none(), button).clicked() {
-        *action = Action::Copy(which);
+    // Dopo una copia il pulsante stesso mostra il conto alla rovescia.
+    let copied = copy
+        .pending
+        .filter(|(pending, _)| *pending == which)
+        .map(|(_, secs)| secs);
+    let button = match copied {
+        Some(secs) => egui::Button::new(
+            egui::RichText::new(format!("Copiato · {secs} s")).color(theme::ACCENT_BRIGHT),
+        )
+        .stroke(egui::Stroke::new(1.0, theme::ACCENT)),
+        None => egui::Button::new("Copia"),
     }
-    if let Some((pending, secs)) = copy.pending {
-        if pending == which {
-            ui.weak(format!("Copiato · si cancella tra {secs} s"));
-        }
+    .min_size(egui::vec2(ACTION_WIDTH, 0.0));
+    let response = ui.add_enabled(copy.unavailable.is_none(), button);
+    let response = match copied {
+        Some(_) => response.on_hover_text("Il clipboard verrà svuotato allo scadere"),
+        None => response,
+    };
+    if response.clicked() {
+        *action = Action::Copy(which);
     }
 }
 
@@ -816,9 +886,9 @@ fn empty_state(ui: &mut egui::Ui, focus: &mut Option<Focus>, action: &mut Action
     ui.vertical_centered(|ui| {
         ui.add_space(ui.available_height() * 0.3);
         ui.heading("Il vault è vuoto");
-        ui.label("Aggiungi la prima voce per iniziare.");
-        ui.add_space(12.0);
-        let button = ui.button("Crea la prima voce");
+        ui.weak("Aggiungi la prima voce per iniziare.");
+        ui.add_space(16.0);
+        let button = ui.add(theme::primary_button("+  Crea la prima voce"));
         if take_focus(focus, Focus::FirstEntry) {
             button.request_focus();
         }
@@ -847,37 +917,100 @@ fn delete_dialog(
         *action = Action::CancelDelete;
         return;
     };
-    let modal = egui::Modal::new(egui::Id::new("pwdv-delete")).show(ctx, |ui| {
-        ui.set_width(380.0);
-        ui.heading("Eliminare la voce?");
-        ui.add_space(8.0);
-        ui.label(format!(
-            "L'operazione non si può annullare. Per confermare digita il nome della voce: «{}»",
-            entry.name
-        ));
-        ui.add_space(8.0);
-        let field =
-            ui.add(egui::TextEdit::singleline(&mut dialog.typed).desired_width(f32::INFINITY));
-        if take_focus(focus, Focus::DeleteConfirm) {
-            field.request_focus();
-        }
-        let confirmed = dialog.typed == entry.name;
-        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let text = egui::RichText::new("Elimina").color(ui.visuals().error_fg_color);
-            let clicked = ui.add_enabled(confirmed, egui::Button::new(text)).clicked();
-            if confirmed && (clicked || enter) {
-                *action = Action::ConfirmDelete;
+    let frame = egui::Frame::popup(&ctx.global_style()).inner_margin(egui::Margin::same(24));
+    let modal = egui::Modal::new(egui::Id::new("pwdv-delete"))
+        .frame(frame)
+        .show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("Eliminare la voce?");
+            ui.add_space(8.0);
+            ui.label(format!(
+                "L'operazione non si può annullare. Per confermare digita il nome della voce: «{}»",
+                entry.name
+            ));
+            ui.add_space(8.0);
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut dialog.typed)
+                    .margin(unlock::FIELD_MARGIN)
+                    .desired_width(f32::INFINITY),
+            );
+            if take_focus(focus, Focus::DeleteConfirm) {
+                field.request_focus();
             }
-            if ui.button("Annulla").clicked() {
-                *action = Action::CancelDelete;
-            }
+            let confirmed = dialog.typed == entry.name;
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let clicked = ui
+                    .add_enabled(confirmed, theme::danger_button("Elimina"))
+                    .clicked();
+                if confirmed && (clicked || enter) {
+                    *action = Action::ConfirmDelete;
+                }
+                if ui.button("Annulla").clicked() {
+                    *action = Action::CancelDelete;
+                }
+            });
         });
-    });
     if modal.should_close() && matches!(action, Action::None) {
         *action = Action::CancelDelete;
     }
+}
+
+/// Riga del riquadro di dettaglio: etichetta, valore troncato se lungo e
+/// `buttons` pulsanti larghi `ACTION_WIDTH` allineati a destra. I pulsanti si
+/// aggiungono da sinistra a destra, così l'ordine del Tab segue quello visivo.
+/// Il testo completo del valore compare al passaggio del mouse solo se
+/// `tooltip`: mai per la password, che non deve finire in un tooltip.
+fn field_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: egui::RichText,
+    tooltip: bool,
+    buttons: usize,
+    add_buttons: impl FnOnce(&mut egui::Ui),
+) {
+    ui.horizontal(|ui| {
+        let gap = ui.spacing().item_spacing.x;
+        row_label(ui, label);
+        let reserved = buttons as f32 * (ACTION_WIDTH + gap);
+        let width = (ui.available_width() - reserved).max(0.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, FIELD_ROW_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_width(width);
+                ui.add(
+                    egui::Label::new(value)
+                        .truncate()
+                        .show_tooltip_when_elided(tooltip),
+                );
+            },
+        );
+        add_buttons(ui);
+    });
+}
+
+/// Etichetta della colonna sinistra del riquadro di dettaglio.
+fn row_label(ui: &mut egui::Ui, label: &str) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(LABEL_WIDTH, FIELD_ROW_HEIGHT),
+        egui::Sense::hover(),
+    );
+    ui.painter().text(
+        rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        label.to_uppercase(),
+        egui::TextStyle::Small.resolve(ui.style()),
+        theme::TEXT_FAINT,
+    );
+}
+
+fn form_field(buf: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(buf)
+        .char_limit(MAX_FIELD_CHARS)
+        .margin(unlock::FIELD_MARGIN)
+        .desired_width(FIELD_WIDTH)
 }
 
 fn take_focus(focus: &mut Option<Focus>, which: Focus) -> bool {

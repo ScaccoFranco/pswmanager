@@ -3,6 +3,7 @@
 mod app;
 mod main_view;
 mod security;
+mod theme;
 mod unlock;
 mod window;
 mod worker;
@@ -27,13 +28,17 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "pwdv",
         options,
-        Box::new(|_cc| Ok(Box::new(app::PwdvApp::default()))),
+        Box::new(|cc| {
+            theme::apply(&cc.egui_ctx);
+            Ok(Box::new(app::PwdvApp::default()))
+        }),
     )
 }
 
 /// Icona in pixel art: un insetto nero su fondo grigio. Stessa griglia di
 /// `packaging/linux/pwdv.svg`, usata dai launcher tramite il file `.desktop`.
-const BUG_PIXELS: [&str; 16] = [
+/// La stessa griglia è disegnata nella UI da `theme::bug_mark`.
+pub(crate) const BUG_PIXELS: [&str; 16] = [
     "................",
     "....#......#....",
     ".....#....#.....",

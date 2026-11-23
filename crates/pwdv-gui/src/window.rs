@@ -5,8 +5,11 @@
 
 use eframe::egui::{self, CursorIcon, ResizeDirection, ViewportCommand};
 
-const TITLE_BAR_HEIGHT: f32 = 30.0;
-const BUTTON_SIZE: egui::Vec2 = egui::vec2(36.0, 24.0);
+use crate::theme;
+
+const TITLE_BAR_HEIGHT: f32 = 32.0;
+/// I pulsanti occupano tutta l'altezza della barra, come nei sistemi desktop.
+const BUTTON_SIZE: egui::Vec2 = egui::vec2(44.0, TITLE_BAR_HEIGHT);
 /// Spessore della fascia sui bordi che avvia il ridimensionamento.
 const RESIZE_MARGIN: f32 = 5.0;
 
@@ -14,9 +17,13 @@ const RESIZE_MARGIN: f32 = 5.0;
 pub fn title_bar(ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+    let frame = egui::Frame::new()
+        .fill(theme::PANEL)
+        .stroke(egui::Stroke::new(1.0, theme::BORDER));
     egui::Panel::top("pwdv-title-bar")
         .exact_size(TITLE_BAR_HEIGHT)
         .resizable(false)
+        .frame(frame)
         .show(ui, |ui| {
             let bar = ui.max_rect();
             // Sotto i pulsanti: trascinare sposta, doppio clic ingrandisce.
@@ -27,29 +34,96 @@ pub fn title_bar(ui: &mut egui::Ui) {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
 
+            ui.spacing_mut().item_spacing.x = 0.0;
             ui.horizontal_centered(|ui| {
-                ui.strong("pwdv");
+                ui.add_space(10.0);
+                theme::bug_mark(ui, 1.0, theme::TEXT_WEAK);
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("pwdv").color(theme::TEXT_WEAK).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let close = ui.add(egui::Button::new("🗙").frame(false).min_size(BUTTON_SIZE));
-                    if close.on_hover_text("Chiudi").clicked() {
+                    if caption_button(ui, Caption::Close)
+                        .on_hover_text("Chiudi")
+                        .clicked()
+                    {
                         ctx.send_viewport_cmd(ViewportCommand::Close);
                     }
-                    let (icon, hint) = if maximized {
-                        ("🗗", "Ripristina")
+                    let (caption, hint) = if maximized {
+                        (Caption::Restore, "Ripristina")
                     } else {
-                        ("🗖", "Ingrandisci")
+                        (Caption::Maximize, "Ingrandisci")
                     };
-                    let max = ui.add(egui::Button::new(icon).frame(false).min_size(BUTTON_SIZE));
-                    if max.on_hover_text(hint).clicked() {
+                    if caption_button(ui, caption).on_hover_text(hint).clicked() {
                         ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
                     }
-                    let min = ui.add(egui::Button::new("🗕").frame(false).min_size(BUTTON_SIZE));
-                    if min.on_hover_text("Riduci a icona").clicked() {
+                    if caption_button(ui, Caption::Minimize)
+                        .on_hover_text("Riduci a icona")
+                        .clicked()
+                    {
                         ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
                     }
                 });
             });
         });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Caption {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+/// Pulsante della barra del titolo con il simbolo disegnato a linee sottili,
+/// indipendente dai glifi disponibili nel font.
+fn caption_button(ui: &mut egui::Ui, caption: Caption) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(BUTTON_SIZE, egui::Sense::click());
+    let (fill, color) = match (
+        caption,
+        response.hovered(),
+        response.is_pointer_button_down_on(),
+    ) {
+        (Caption::Close, true, _) => (theme::DANGER, egui::Color32::WHITE),
+        (_, true, true) => (theme::PRESSED, theme::TEXT),
+        (_, true, false) => (theme::HOVER, theme::TEXT),
+        _ => (egui::Color32::TRANSPARENT, theme::TEXT_WEAK),
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, egui::CornerRadius::ZERO, fill);
+    let stroke = egui::Stroke::new(1.0, color);
+    let c = rect.center();
+    let r = 5.0;
+    match caption {
+        Caption::Minimize => {
+            painter.hline(c.x - r..=c.x + r, c.y, stroke);
+        }
+        Caption::Maximize => {
+            let square = egui::Rect::from_center_size(c, egui::vec2(2.0 * r, 2.0 * r));
+            painter.rect_stroke(square, 0.0, stroke, egui::StrokeKind::Inside);
+        }
+        Caption::Restore => {
+            let back =
+                egui::Rect::from_min_size(c + egui::vec2(-r + 2.0, -r), egui::vec2(8.0, 8.0));
+            let front =
+                egui::Rect::from_min_size(c + egui::vec2(-r, -r + 2.0), egui::vec2(8.0, 8.0));
+            painter.rect_stroke(back, 0.0, stroke, egui::StrokeKind::Inside);
+            painter.rect_filled(
+                front,
+                0.0,
+                if fill == egui::Color32::TRANSPARENT {
+                    theme::PANEL
+                } else {
+                    fill
+                },
+            );
+            painter.rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
+        }
+        Caption::Close => {
+            painter.line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
+            painter.line_segment([c + egui::vec2(-r, r), c + egui::vec2(r, -r)], stroke);
+        }
+    }
+    response
 }
 
 /// Ridimensionamento dai bordi: cursore adatto al passaggio e, alla pressione,

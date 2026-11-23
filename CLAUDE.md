@@ -1,12 +1,42 @@
 # pwdv — password manager cifrato (Rust)
 
-Vault locale cifrato, CLI. Nessuna sincronizzazione, nessun server.
+## Scopo
+
+Vault locale cifrato, CLI (`pwdv`) e GUI (`pwdv-gui`) sullo stesso file `.pwdv`.
+Nessuna sincronizzazione, nessun server, nessuna rete. Per uso personale.
+
+## Direzione
+
+- Obiettivi attuali: generatore di password nella GUI; tema chiaro/scuro (senza persistenza su disco).
+- Target: multipiattaforma (Linux, macOS, Windows). Oggi solo Linux è coperto: non introdurre nuove dipendenze da Unix senza `#[cfg]` e alternativa.
+- Non-obiettivi: sincronizzazione, cloud, account, funzioni di rete, telemetria, recupero della master password.
+- Priorità nei trade-off: sicurezza > correttezza > semplicità > UX > performance.
+
+## Comandi
+
+- Build: `cargo build --release` (in debug Argon2 è molto lento)
+- Test: `cargo test --workspace`
+- Lint: `cargo clippy --workspace --all-targets -- -D warnings` · format: `cargo fmt`
+- Run: `cargo run --release -p pwdv-gui` · `cargo run --release -p pwdv-cli -- --help`
+- Install (Linux): `./install.sh` / `./uninstall.sh`
+
+## Struttura
+
+```
+crates/pwdv-core/   libreria: format, crypto, key, policy, vault, store, error (+ tests/tamper.rs)
+crates/pwdv-cli/    binario `pwdv`: init, add, get, list, rm, passwd, gen
+crates/pwdv-gui/    binario `pwdv-gui`: app, unlock, worker, main_view, security, window, theme
+packaging/linux/    .desktop e icona per install.sh
+docs/               ARCHITECTURE.md, decisions/ (ADR)
+prompts/            prompt di lavoro (ignorato da git)
+```
 
 ## Stack
 
 - Rust 2021, `cargo` workspace singolo
 - `argon2` 0.5 (feature `zeroize`), `chacha20poly1305` 0.10, `zeroize` 1 (feature `zeroize_derive`), `rand` 0.8, `thiserror` 1
 - Vault store e CLI: `serde` 1 (feature `derive`), `serde_json` 1, `clap` 4 (feature `derive`), `rpassword` 7
+- GUI: `eframe` 0.36 (senza `persistence`), `arboard` 3.6 (feature `wayland-data-control`)
 - Nessuna dipendenza aggiuntiva senza richiesta esplicita
 
 ## Invarianti crittografici — NON modificabili
@@ -19,21 +49,8 @@ Vault locale cifrato, CLI. Nessuna sincronizzazione, nessun server.
 
 ## Formato file `.pwdv` v1
 
-| offset | len | campo |
-|---|---|---|
-| 0 | 4 | magic `PWDV` |
-| 4 | 1 | version = 1 |
-| 5 | 1 | kdf_id = 1 (Argon2id) |
-| 6 | 4 | m_cost KiB, u32 LE |
-| 10 | 4 | t_cost, u32 LE |
-| 14 | 4 | p_cost, u32 LE |
-| 18 | 16 | salt |
-| 34 | 24 | dek_nonce |
-| 58 | 48 | wrapped_dek (32B DEK + 16B tag) |
-| 106 | 24 | vault_nonce |
-| 130 | .. | ciphertext + tag Poly1305 |
-
-`HEADER_LEN = 130`.
+Tabella degli offset: @docs/ARCHITECTURE.md (sezione "Dati e persistenza"). `HEADER_LEN = 130`;
+offset chiave: salt 18, dek_nonce 34, wrapped_dek 58, vault_nonce 106, ciphertext 130.
 
 **AAD (regole esatte, non derogabili):**
 
@@ -60,13 +77,13 @@ I parametri KDF e il salt sono esclusi dall'AAD del vault per consentire il camb
 - Buffer della master password: `String` dedicata, dopo l'invio `zeroize()` e poi `clear()`. Mai solo `clear()`.
 - Nessuna struct che contiene password decifrate deriva `Debug`, `Serialize` o `Clone`.
 - Nessun segreto in titolo finestra, tooltip, log, messaggi di errore, o nel testo di un widget non mascherato.
-- Auto-lock: alla scadenza del timer la DEK e i dati del vault vengono zeroizzati e lo stato torna a `Locked`. Non è sufficiente cambiare schermata.
+- Auto-lock: alla scadenza del timer la DEK e i dati del vault vengono zeroizzati e lo stato torna a `Locked` (nel codice: `AppState::Unlocking`). Non è sufficiente cambiare schermata.
 - Gli errori mostrati all'utente non distinguono password sbagliata da file manomesso.
 - Fuori scope, da dichiarare nel README: protezione da screenshot, keylogger, screen recording e clipboard manager di terze parti.
 
 ## Test obbligatori
 
-Ogni step si chiude con `cargo test` e `cargo clippy -- -D warnings` verdi.
+Ogni step si chiude con `cargo test --workspace` e `cargo clippy --workspace --all-targets -- -D warnings` verdi.
 
 I vettori noti per Argon2id vanno copiati da RFC 9106. **Non inventare valori attesi**: se un vettore non è disponibile, lascia il test `#[ignore]` con un commento, non scrivere byte plausibili.
 
@@ -75,3 +92,17 @@ I vettori noti per Argon2id vanno copiati da RFC 9106. **Non inventare valori at
 - Report dopo ogni step: file toccati, funzioni aggiunte, output di `cargo test`.
 - Non anticipare step successivi.
 - Non aggiungere feature non richieste.
+
+## Regole per Claude
+
+- Mai `git commit` o `git push` senza richiesta esplicita.
+- Prima di modifiche strutturali leggi @docs/ARCHITECTURE.md.
+- Dopo aver aggiunto/rimosso una tecnologia o cambiato come comunicano i componenti, aggiorna docs/ARCHITECTURE.md (o usa /aggiorna-architettura).
+- Decisioni non banali → nuovo ADR in docs/decisions/ (da `TEMPLATE.md`).
+- Messaggi utente: CLI in inglese, GUI in italiano. Commenti nel codice in italiano.
+
+## Riferimenti
+
+- Architettura: @docs/ARCHITECTURE.md
+- Decisioni: docs/decisions/
+- Guida utente e modello di minaccia: README.md

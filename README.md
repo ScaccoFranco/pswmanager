@@ -303,7 +303,7 @@ della CLI). Puoi scriverne un altro, poi premi **Apri** o **Invio**.
 
 ### 5.2 Crea un nuovo vault
 
-1. Scegli una **master password** e scrivila nel primo campo.
+1. Scegli una **master password** di almeno **15 caratteri** e scrivila nel primo campo.
 2. Premi **Invio** e riscrivila nel campo di conferma.
 3. Premi **Invio** o **Crea vault**.
 
@@ -463,7 +463,7 @@ pwdv rm GitHub
 pwdv passwd
 ```
 
-Chiede la password attuale e poi due volte la nuova. Viene ricifrata solo la DEK, e il
+Chiede la password attuale e poi due volte la nuova (almeno 15 caratteri). Viene ricifrata solo la DEK, e il
 file `.bak` viene eliminato perché si aprirebbe ancora con la vecchia password.
 
 ### Genera una password casuale
@@ -584,7 +584,7 @@ Consigli:
 
 | Crate | Moduli principali |
 |---|---|
-| `pwdv-core` | `format` (header v1), `crypto` (Argon2id, XChaCha20-Poly1305, KEK/DEK), `key` (chiavi da 32 byte), `vault` (voci), `store` (lettura, scrittura atomica, `.bak`), `error` |
+| `pwdv-core` | `format` (header v1), `crypto` (Argon2id, XChaCha20-Poly1305, KEK/DEK), `key` (chiavi da 32 byte), `policy` (regole sulle nuove master password), `vault` (voci), `store` (lettura, scrittura atomica, `.bak`), `error` |
 | `pwdv-cli` | `main.rs`: comandi `init`, `add`, `get`, `list`, `rm`, `passwd`, `gen` |
 | `pwdv-gui` | `app` (macchina a stati), `unlock` (sblocco e creazione), `worker` (Argon2 fuori dal thread della UI), `main_view` (elenco e dettaglio), `security` (blocco automatico e clipboard) |
 

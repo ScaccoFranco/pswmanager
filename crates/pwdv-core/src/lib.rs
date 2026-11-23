@@ -4,5 +4,6 @@ pub mod crypto;
 pub mod error;
 pub mod format;
 pub mod key;
+pub mod policy;
 pub mod store;
 pub mod vault;

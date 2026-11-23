@@ -9,8 +9,8 @@ use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 use zeroize::Zeroizing;
 
-use pwdv_core::store;
 use pwdv_core::vault::{Entry, VaultData};
+use pwdv_core::{policy, store};
 
 type CliResult<T = ()> = Result<T, Box<dyn Error>>;
 
@@ -230,8 +230,12 @@ fn prompt(label: &str) -> CliResult<Zeroizing<String>> {
 
 fn prompt_new(label: &str) -> CliResult<Zeroizing<String>> {
     let first = prompt(label)?;
-    if first.is_empty() {
-        return Err("password must not be empty".into());
+    if !policy::master_long_enough(&first) {
+        return Err(format!(
+            "master password must be at least {} characters",
+            policy::MIN_MASTER_CHARS
+        )
+        .into());
     }
     let confirm = prompt("Confirm: ")?;
     if *first != *confirm {

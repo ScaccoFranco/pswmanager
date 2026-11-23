@@ -4,7 +4,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+use pwdv_core::policy;
 use zeroize::{Zeroize, Zeroizing};
+
+use crate::theme::{self, WideButton};
 
 /// Il campo non accetta più caratteri di così.
 pub const MAX_PASSWORD_CHARS: usize = 256;
@@ -149,8 +152,9 @@ pub fn unlock_screen(
 
     form_column(ui, |ui| {
         ui.heading("Sblocca il vault");
-        ui.weak(path.display().to_string());
+        path_line(ui, path);
         ui.add_space(16.0);
+        theme::field_label(ui, "Master password");
 
         let field = ui.add_enabled(
             !busy,
@@ -164,7 +168,7 @@ pub fn unlock_screen(
         let can_submit = !busy && wait.is_none() && !form.password.is_empty();
         ui.add_space(8.0);
         let clicked = ui
-            .add_enabled(can_submit, egui::Button::new("Sblocca"))
+            .add_wide(can_submit, theme::primary_button("Sblocca"))
             .clicked();
 
         if can_submit && (enter || clicked) {
@@ -178,22 +182,25 @@ pub fn unlock_screen(
             progress(ui, "Sblocco in corso…");
         } else {
             if let Some(wait) = wait {
-                ui.label(format!(
-                    "Troppi tentativi falliti: riprova tra {} s.",
-                    wait.as_millis().div_ceil(1000)
-                ));
+                ui.colored_label(
+                    theme::WARN,
+                    format!(
+                        "Troppi tentativi falliti: riprova tra {} s.",
+                        wait.as_millis().div_ceil(1000)
+                    ),
+                );
                 ui.ctx()
                     .request_repaint_after(wait.min(Duration::from_millis(250)));
             }
             if let Some(info) = &form.info {
-                ui.label(info);
+                ui.weak(info);
             }
             notice(ui, form);
         }
 
-        ui.add_space(16.0);
+        ui.add_space(8.0);
         if ui
-            .add_enabled(!busy, egui::Button::new("Cambia vault"))
+            .add_enabled(!busy, theme::quiet_button("Cambia vault"))
             .clicked()
         {
             action = FormAction::Back;
@@ -212,14 +219,17 @@ pub fn create_screen(
 
     form_column(ui, |ui| {
         ui.heading("Crea un nuovo vault");
-        ui.weak(format!("Nessun vault in {}.", path.display()));
+        path_line(ui, path);
         ui.add_space(12.0);
-        ui.colored_label(
-            ui.visuals().warn_fg_color,
+        theme::callout(
+            ui,
+            theme::WARN,
+            theme::WARN_DIM,
             "La master password non è recuperabile: se la dimentichi, \
              i dati del vault sono persi per sempre.",
         );
         ui.add_space(12.0);
+        theme::field_label(ui, "Master password");
 
         let first = ui.add_enabled(
             !busy,
@@ -232,7 +242,12 @@ pub fn create_screen(
         if submitted(ui, &first) {
             form.confirm_focus = true;
         }
+        ui.weak(format!(
+            "Almeno {} caratteri: una frase di più parole va benissimo.",
+            policy::MIN_MASTER_CHARS
+        ));
         ui.add_space(4.0);
+        theme::field_label(ui, "Conferma");
         let second = ui.add_enabled(
             !busy,
             password_field(&mut form.confirm, CONFIRM_ID, "Conferma master password"),
@@ -245,16 +260,17 @@ pub fn create_screen(
         let can_submit = !busy && !form.password.is_empty() && !form.confirm.is_empty();
         ui.add_space(8.0);
         let clicked = ui
-            .add_enabled(can_submit, egui::Button::new("Crea vault"))
+            .add_wide(can_submit, theme::primary_button("Crea vault"))
             .clicked();
 
         if can_submit && (enter || clicked) {
-            if form.password == form.confirm {
-                action = FormAction::Submit(form.take_password(ui.ctx()));
-            } else {
-                form.wipe(ui.ctx());
-                form.notice = Some("Le password non coincidono.".to_owned());
-                form.wants_focus = true;
+            match new_master_problem(&form.password, &form.confirm) {
+                None => action = FormAction::Submit(form.take_password(ui.ctx())),
+                Some(problem) => {
+                    form.wipe(ui.ctx());
+                    form.notice = Some(problem);
+                    form.wants_focus = true;
+                }
             }
         } else if enter {
             form.wants_focus = true;
@@ -267,15 +283,30 @@ pub fn create_screen(
             notice(ui, form);
         }
 
-        ui.add_space(16.0);
+        ui.add_space(8.0);
         if ui
-            .add_enabled(!busy, egui::Button::new("Indietro"))
+            .add_enabled(!busy, theme::quiet_button("Indietro"))
             .clicked()
         {
             action = FormAction::Back;
         }
     });
     action
+}
+
+/// Perché la nuova master password non è accettabile, se non lo è. Il
+/// messaggio non contiene la password né la sua lunghezza.
+fn new_master_problem(password: &str, confirm: &str) -> Option<String> {
+    if !policy::master_long_enough(password) {
+        Some(format!(
+            "La master password deve avere almeno {} caratteri.",
+            policy::MIN_MASTER_CHARS
+        ))
+    } else if password != confirm {
+        Some("Le password non coincidono.".to_owned())
+    } else {
+        None
+    }
 }
 
 /// Campo sempre mascherato, senza toggle di visibilità.
@@ -285,7 +316,21 @@ fn password_field<'a>(buf: &'a mut String, id: &str, hint: &'static str) -> egui
         .password(true)
         .char_limit(MAX_PASSWORD_CHARS)
         .hint_text(hint)
+        .margin(FIELD_MARGIN)
         .desired_width(f32::INFINITY)
+}
+
+/// Margine interno dei campi dei moduli: più ariosi dei campi compatti di egui.
+pub const FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(8, 7);
+
+/// Percorso del vault su una riga: se non ci sta viene troncato e il
+/// percorso completo compare al passaggio del mouse. Non è un segreto.
+fn path_line(ui: &mut egui::Ui, path: &Path) {
+    let text = egui::RichText::new(path.display().to_string())
+        .small()
+        .monospace()
+        .color(theme::TEXT_WEAK);
+    ui.add(egui::Label::new(text).truncate());
 }
 
 /// Enter in un campo a riga singola: egui gli toglie il focus nello stesso frame.
@@ -306,17 +351,21 @@ fn notice(ui: &mut egui::Ui, form: &PasswordForm) {
     }
 }
 
-/// Colonna centrata di larghezza fissa per le schermate senza vault aperto.
+/// Riquadro centrato di larghezza fissa per le schermate senza vault aperto.
 pub fn form_column(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
-    const WIDTH: f32 = 380.0;
+    const WIDTH: f32 = 420.0;
     let width = WIDTH.min(ui.available_width());
     let side = (ui.available_width() - width) / 2.0;
-    ui.add_space(ui.available_height() * 0.18);
+    ui.add_space(ui.available_height() * 0.16);
     ui.horizontal_top(|ui| {
         ui.add_space(side);
-        ui.vertical(|ui| {
-            ui.set_width(width);
-            add_contents(ui);
+        let card = theme::card();
+        let inner = width - card.total_margin().sum().x;
+        card.show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.set_width(inner);
+                add_contents(ui);
+            });
         });
     });
 }
@@ -386,6 +435,23 @@ mod tests {
         assert!(form.password.is_empty() && form.confirm.is_empty());
         assert!(form.password.capacity() >= PASSWORD_CAPACITY);
         assert!(form.confirm.capacity() >= PASSWORD_CAPACITY);
+    }
+
+    #[test]
+    fn new_master_must_be_long_enough_then_match() {
+        let short = "a".repeat(policy::MIN_MASTER_CHARS - 1);
+        let ok = "a".repeat(policy::MIN_MASTER_CHARS);
+
+        let too_short = new_master_problem(&short, &short).unwrap();
+        assert!(too_short.contains("almeno"));
+        // La lunghezza si controlla per prima: niente indizi sulla conferma.
+        assert_eq!(new_master_problem(&short, "x"), Some(too_short));
+
+        assert_eq!(
+            new_master_problem(&ok, "x").as_deref(),
+            Some("Le password non coincidono.")
+        );
+        assert_eq!(new_master_problem(&ok, &ok), None);
     }
 
     #[test]

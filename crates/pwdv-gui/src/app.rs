@@ -13,6 +13,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::main_view::{self, MainView};
 use crate::security::{self, Clipboard, IdleTimer, Now};
+use crate::theme::{self, WideButton};
 use crate::unlock::{self, FormAction, PasswordForm};
 use crate::window;
 use crate::worker::{self, Outcome};
@@ -284,11 +285,35 @@ impl PwdvApp {
             return;
         };
         let idle = &mut self.idle;
-        egui::Panel::top("pwdv-menu").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                if vault_menu(ui, idle, now) {
-                    lock = true;
-                }
+        let bar = egui::Frame::new()
+            .fill(theme::PANEL)
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .stroke(egui::Stroke::new(1.0, theme::BORDER));
+        egui::Panel::top("pwdv-menu").frame(bar).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
+                    if vault_menu(ui, idle, now) {
+                        lock = true;
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let button = egui::Button::new("Blocca").right_text(
+                        egui::RichText::new("Ctrl+L")
+                            .small()
+                            .color(theme::TEXT_FAINT),
+                    );
+                    if ui.add(button).clicked() {
+                        lock = true;
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Blocco automatico: {}",
+                            format_duration(idle.timeout())
+                        ))
+                        .small()
+                        .color(theme::TEXT_FAINT),
+                    );
+                });
             });
         });
         main_view::show(ui, session, &mut self.clipboard, now);
@@ -387,11 +412,22 @@ fn format_duration(d: Duration) -> String {
 fn welcome_screen(ui: &mut egui::Ui, path_input: &mut String, focus: &mut bool) -> Nav {
     let mut nav = Nav::Stay;
     unlock::form_column(ui, |ui| {
-        ui.heading("pwdv");
-        ui.label("Vault locale di password cifrato.");
-        ui.add_space(16.0);
-        ui.label("File del vault");
-        let field = ui.add(egui::TextEdit::singleline(path_input).desired_width(f32::INFINITY));
+        ui.horizontal(|ui| {
+            theme::bug_mark(ui, 3.0, theme::TEXT);
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                ui.add_space(4.0);
+                ui.heading("pwdv");
+                ui.weak("Vault locale di password cifrato.");
+            });
+        });
+        ui.add_space(20.0);
+        theme::field_label(ui, "File del vault");
+        let field = ui.add(
+            egui::TextEdit::singleline(path_input)
+                .margin(unlock::FIELD_MARGIN)
+                .desired_width(f32::INFINITY),
+        );
         if std::mem::take(focus) {
             field.request_focus();
         }
@@ -399,7 +435,7 @@ fn welcome_screen(ui: &mut egui::Ui, path_input: &mut String, focus: &mut bool) 
         let can_open = !path_input.trim().is_empty();
         ui.add_space(8.0);
         let clicked = ui
-            .add_enabled(can_open, egui::Button::new("Apri"))
+            .add_wide(can_open, theme::primary_button("Apri"))
             .clicked();
         if can_open && (enter || clicked) {
             nav = Nav::Open;
@@ -413,9 +449,12 @@ fn error_screen(ui: &mut egui::Ui, message: &str) -> Nav {
     unlock::form_column(ui, |ui| {
         ui.heading("Errore");
         ui.add_space(8.0);
-        ui.colored_label(ui.visuals().error_fg_color, message);
+        theme::callout(ui, theme::DANGER, theme::DANGER_DIM, message);
         ui.add_space(16.0);
-        if ui.button("Torna all'inizio").clicked() {
+        if ui
+            .add_wide(true, egui::Button::new("Torna all'inizio"))
+            .clicked()
+        {
             nav = Nav::Back;
         }
     });
