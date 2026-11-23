@@ -119,6 +119,7 @@ crates/
 | [`chacha20poly1305`](https://crates.io/crates/chacha20poly1305) | 0.10 | Cifratura autenticata **XChaCha20-Poly1305** |
 | [`rand`](https://crates.io/crates/rand) | 0.8 | Chiavi, salt e nonce casuali da `OsRng`, il generatore del sistema operativo |
 | [`zeroize`](https://crates.io/crates/zeroize) | 1 | Azzeramento della memoria che ha contenuto chiavi e password |
+| [`libc`](https://crates.io/crates/libc) | 0.2 | Solo Linux e macOS: disattiva i core dump e blocca in RAM chiavi e password (`setrlimit`, `prctl`, `mlock`) |
 
 Scelte di progetto:
 
@@ -186,9 +187,11 @@ master password ──Argon2id(salt, parametri)──▶ KEK (32 byte)
   versione cifrata con la KEK.
 - **Cambiare la master password** significa solo ricifrare la DEK con una nuova KEK: i
   dati del vault non vengono riscritti.
-- Prima di Argon2id la master password viene normalizzata in **NFKC** (come raccomanda
-  NIST SP 800-63B): "è" digitata come carattere unico o come "e" + accento apre lo stesso
-  vault, su qualunque sistema o tastiera. Per i vault creati prima di questa regola, se la
+- Prima di Argon2id la master password viene normalizzata in **NFKC**: "è" digitata come
+  carattere unico o come "e" + accento apre lo stesso vault, su qualunque sistema o
+  tastiera. NIST SP 800-63B rev. 4 raccomanda NFC; pwdv usa NFKC, che unifica anche i
+  caratteri di compatibilità come le lettere a larghezza piena (motivazione nell'ADR
+  [0005](docs/decisions/0005-normalizzazione-nfkc-master-password.md)). Per i vault creati prima di questa regola, se la
   forma normalizzata non apre, pwdv riprova con la password così come è stata digitata.
 - L'hash della master password non viene mai salvato.
 
@@ -262,7 +265,8 @@ sconosciuta viene rifiutato, per non perdere dati al primo salvataggio.
   disco (`sync_all`) e poi lo rinomina al posto del vault: un'interruzione non lascia
   mai un file a metà.
 - Prima di ogni salvataggio la versione precedente viene conservata in `<vault>.bak`.
-- I file creati hanno permessi `0600` (leggibili solo dal tuo utente).
+- Su Linux e macOS i file creati hanno permessi `0600` (leggibili solo dal tuo utente).
+  Su Windows valgono i permessi predefiniti della cartella.
 
 ---
 
@@ -325,8 +329,8 @@ cargo run --release -p pwdv-gui
 
 ### 5.1 Scegli il file del vault
 
-La prima schermata mostra il percorso del vault, per default `~/.vault.pwdv` (lo stesso
-della CLI). Puoi scriverne un altro, poi premi **Apri** o **Invio**.
+La prima schermata mostra il percorso del vault, per default `~/.vault.pwdv` (su Windows
+`%USERPROFILE%\.vault.pwdv`; lo stesso della CLI). Puoi scriverne un altro, poi premi **Apri** o **Invio**.
 
 - Se il file esiste, passi alla schermata di sblocco.
 - Se non esiste, passi alla creazione di un nuovo vault.
@@ -397,8 +401,9 @@ Seleziona una voce. Nel dettaglio:
   lunghezza;
 - **Mostra** la rivela; il pulsante diventa **Nascondi (10 s)** e dopo 10 secondi la
   password torna mascherata da sola;
-- **Copia**, accanto a username e password, mette il valore nel clipboard. Accanto
-  compare "Copiato · si cancella tra N s": dopo 20 secondi il clipboard viene svuotato.
+- **Copia**, accanto a username e password, mette il valore nel clipboard. Il pulsante
+  diventa "Copiato · N s" con il conto alla rovescia: dopo 20 secondi il clipboard viene
+  svuotato.
 
 ### 5.8 Modifica una voce
 
@@ -446,7 +451,8 @@ Non usare CLI e GUI sullo stesso vault nello stesso momento.
 
 ## 6. Tutorial: riga di comando
 
-Tutti i comandi usano per default il vault `~/.vault.pwdv`; con `--vault <PATH>` ne
+Tutti i comandi usano per default il vault `~/.vault.pwdv` (su Windows
+`%USERPROFILE%\.vault.pwdv`); con `--vault <PATH>` ne
 scegli un altro. Le password si inseriscono sempre dal terminale, senza eco: non passano
 mai come argomenti, quindi non finiscono nella cronologia della shell. I messaggi della
 CLI sono in inglese.
@@ -481,7 +487,8 @@ unico e la password non può essere vuota.
 pwdv list
 ```
 
-Stampa nome, username e URL separati da tabulazioni, in ordine alfabetico. Le password
+Stampa nome, username e URL separati da tabulazioni, ordinati per nome distinguendo
+maiuscole e minuscole (le maiuscole vengono prima: "Zoom" precede "amazon"). Le password
 non vengono mai mostrate.
 
 ### Leggi una voce
@@ -649,9 +656,9 @@ Consigli:
 
 | Crate | Moduli principali |
 |---|---|
-| `pwdv-core` | `format` (header v1), `crypto` (Argon2id, XChaCha20-Poly1305, KEK/DEK), `key` (chiavi da 32 byte), `policy` (regole sulle nuove master password, NFKC; elenco in `data/common-passwords.txt` da [SecLists](https://github.com/danielmiessler/SecLists), licenza MIT), `vault` (voci), `store` (lettura, scrittura atomica, `.bak`), `error` |
+| `pwdv-core` | `format` (header v1), `crypto` (Argon2id, XChaCha20-Poly1305, KEK/DEK), `key` (chiavi da 32 byte), `policy` (regole sulle nuove master password, NFKC; elenco in `data/common-passwords.txt` da [SecLists](https://github.com/danielmiessler/SecLists), licenza MIT), `vault` (voci), `store` (lettura, scrittura atomica, `.bak`, percorso predefinito), `hardening` (core dump disattivati, blocco in RAM), `error` |
 | `pwdv-cli` | `main.rs`: comandi `init`, `add`, `get`, `list`, `rm`, `passwd`, `rekey`, `gen` |
-| `pwdv-gui` | `app` (macchina a stati), `unlock` (sblocco e creazione), `worker` (Argon2 fuori dal thread della UI), `main_view` (elenco e dettaglio), `security` (blocco automatico e clipboard) |
+| `pwdv-gui` | `app` (macchina a stati), `unlock` (sblocco e creazione), `worker` (Argon2 fuori dal thread della UI), `main_view` (elenco e dettaglio), `security` (blocco automatico e clipboard), `window` (cornice della finestra), `theme` (colori e componenti) |
 
 ### Test e controlli
 
@@ -662,7 +669,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 I test comprendono il vettore Argon2id di RFC 9106, prove di manomissione su ogni campo
 dell'header (`crates/pwdv-core/tests/tamper.rs`), la scrittura atomica, il timer di
-blocco e la logica del clipboard (con un clipboard finto, per non toccare quello reale).
+blocco e la logica del clipboard (con un clipboard finto, per non toccare quello reale),
+le regole sulla master password (compreso il rifiuto oltre 256 caratteri), il pulsante
+**Mostra** e, su Linux, la disattivazione dei core dump e il blocco in RAM
+(`crates/pwdv-core/tests/hardening.rs`).
 
 La CI su GitHub (`.github/workflows/ci.yml`) esegue gli stessi controlli, più
 `cargo fmt --check`, a ogni push e pull request, e `cargo audit` ogni settimana per le

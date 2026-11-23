@@ -21,6 +21,7 @@ flowchart LR
   file[("~/.vault.pwdv<br/>+ .bak")]
   clip[["clipboard di sistema<br/>(Wayland data-control / X11)"]]
   comp[["compositor<br/>Wayland / X11, AT-SPI"]]
+  kernel[["kernel / SO<br/>(solo unix)"]]
 
   user -- terminale, rpassword --> cli
   user -- tastiera/mouse --> gui
@@ -31,6 +32,7 @@ flowchart LR
   core -- "file I/O atomico (tmp + sync_all + rename)" --> file
   gui -- arboard --> clip
   gui -- eframe/winit, glow, accesskit --> comp
+  core -- "libc: setrlimit, prctl, mlock" --> kernel
 ```
 
 ## Stack tecnologico
@@ -70,7 +72,7 @@ flowchart LR
 ### pwdv-cli (binario `pwdv`)
 - **Responsabilità**: interfaccia da terminale; messaggi in inglese.
 - **Dipende da**: pwdv-core, clap, rand, rpassword, zeroize.
-- **Espone**: comandi `init`, `add`, `get`, `list`, `rm`, `passwd`, `rekey`, `gen`; opzione `--vault <PATH>` (default `$HOME/.vault.pwdv`).
+- **Espone**: comandi `init`, `add`, `get`, `list`, `rm`, `passwd`, `rekey`, `gen`; opzione `--vault <PATH>` (default `store::default_vault_path()`: `$HOME/.vault.pwdv`, `%USERPROFILE%\.vault.pwdv` su Windows).
 - **Dati posseduti**: nessuno oltre al vault. Ogni comando deriva la KEK dalla master password (nessuna sessione).
 
 ### pwdv-gui (binario `pwdv-gui`)
@@ -83,7 +85,7 @@ flowchart LR
   - `main_view` — elenco con ricerca fuzzy, dettaglio, modifica, eliminazione con conferma per nome.
   - `security` — `IdleTimer` (doppio orologio `Instant` + system time, per la sospensione) e `Clipboard` che si svuota dopo 20 s.
   - `window` — cornice disegnata dall'app (finestra senza decorazioni di sistema).
-  - `theme` — palette, forme e componenti condivisi (in lavorazione, non ancora committato).
+  - `theme` — palette, forme e componenti condivisi.
 - **Dati posseduti**: `Session` in memoria (path, `VaultKey`, `VaultData`, stato vista). Nulla su disco oltre al vault.
 
 ## Comunicazione tra componenti
@@ -97,13 +99,18 @@ flowchart LR
 | core | filesystem | `std::fs` | file binario `.pwdv` v1 | sì | prima il file attuale → `<vault>.bak`, poi il nuovo: entrambi tmp nella stessa dir → `sync_all` → `rename` → sync della dir (unix). La creazione usa `hard_link` al posto di `rename` (non sostituisce mai un file esistente). Permessi `0600` (unix) |
 | gui | clipboard | `arboard` | testo + MIME `x-kde-passwordManagerHint` (Linux) | sì | svuotato dopo 20 s solo se contiene ancora il valore; svuotato a blocco e chiusura |
 | gui | compositor | eframe/winit | eventi input, rendering OpenGL | sì | AT-SPI via accesskit per i lettori di schermo |
+| core (`hardening`) | kernel | `libc` (`setrlimit`, `prctl`, `mlock`), solo `cfg(unix)` | limiti del processo, intervalli di memoria | sì | core dump: se fallisce CLI e GUI non partono; `mlock`: se fallisce si continua e l'utente vede un avviso (ADR 0008, 0009) |
 
 ## Flussi principali
+
+**Avvio (CLI e GUI)**
+1. Prima istruzione del `main`: `hardening::disable_core_dumps()`; se fallisce, uscita con errore.
+2. GUI: i buffer del modulo della master password vengono allocati a capacità fissa e bloccati in RAM.
 
 **Sblocco (GUI)**
 1. L'utente sceglie il path (`Welcome`), il file esiste → `Unlocking`.
 2. Invio: la password viene spostata in un thread `worker`, il buffer UI viene `zeroize()` + `clear()`.
-3. Il worker esegue `store::load_with_key`: Argon2id → KEK → unwrap DEK (AAD `header[0..34]`) → open vault (AAD `header[0..6] ++ header[106..130]`) → JSON → `VaultData`.
+3. Il worker esegue `store::load_with_key`: Argon2id → KEK (scritta direttamente in un `Key32` bloccato in RAM) → unwrap DEK (AAD `header[0..34]`) → open vault (AAD `header[0..6] ++ header[106..130]`) → JSON → `VaultData`.
 4. La UI riceve il risultato via `try_recv()` → `Unlocked(Session)` con la DEK in `VaultKey`.
 
 **Salvataggio (GUI)**
@@ -158,13 +165,13 @@ Wayland/X11, AT-SPI (accessibilità).
 - **Variabili d'ambiente**: `HOME` (`USERPROFILE` su Windows) per il default `.vault.pwdv` in CLI e GUI, `PWDV_AUTOLOCK_SECONDS` (GUI, 10–86400).
 - **Build**: `cargo build --release` (in debug Argon2 è molto lento).
 - **Installazione Linux**: `./install.sh` → `~/.local/bin`, voce `.desktop` da `packaging/linux/pwdv.desktop.in`, icona SVG; `PREFIX` configurabile. `./uninstall.sh` per rimuovere.
+- **Licenza**: GPL-3.0-or-later oppure licenza commerciale ([ADR 0012](decisions/0012-doppia-licenza-gpl-commerciale.md)); campo `license` nel workspace.
 - **CI**: GitHub Actions (`.github/workflows/ci.yml`), solo Linux: `cargo fmt --check`, `cargo clippy --locked … -D warnings`, `cargo test --locked --workspace` a ogni push su `main` e a ogni PR; `cargo audit` (RustSec) anche ogni lunedì.
 
 ## Punti aperti / debito tecnico
 
 - **Multipiattaforma (obiettivo) non ancora coperto**: permessi `0600`, sync della directory, disattivazione dei core dump e `mlock` solo `#[cfg(unix)]` (su Windows mancano `VirtualLock` e ACL ristrette sul file, che richiedono `windows-sys`: rimandati); il codice `cfg(windows)` non è mai stato compilato; MIME `x-kde-passwordManagerHint` solo Linux; `install.sh` e packaging solo Linux; nessun test su macOS/Windows.
 - Generatore di password solo in CLI; tema chiaro/scuro assente (obiettivi correnti).
-- `CLAUDE.md` parla di stato `Locked`, nel codice lo stato bloccato è `AppState::Unlocking`.
 - Due GUI sullo stesso vault possono sovrascriversi (`Conflict` rileva solo cambi di chiave, non di contenuto).
 - `zvariant`, `zvariant_derive`, `zbus_names` non più mantenuti (RUSTSEC-2026-0370/0371/0372), via `eframe → accesskit_unix`: da risolvere aggiornando eframe quando passerà a `zbus` 6.
 - Copie non azzerabili in egui/winit/arboard (documentato nel README §9).

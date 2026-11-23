@@ -18,7 +18,7 @@ type CliResult<T = ()> = Result<T, Box<dyn Error>>;
 #[derive(Parser)]
 #[command(name = "pwdv", version, about = "Local encrypted password vault")]
 struct Cli {
-    /// Vault file [default: $HOME/.vault.pwdv]
+    /// Vault file [default: ~/.vault.pwdv, %USERPROFILE%\.vault.pwdv on Windows]
     #[arg(long, global = true, value_name = "PATH")]
     vault: Option<PathBuf>,
 
