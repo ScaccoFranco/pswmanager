@@ -62,9 +62,6 @@ pub const MAX_MASTER_CHARS: usize = 256;
 /// `data/LICENSE-SecLists`). Le più corte sono già escluse dalla lunghezza minima.
 const COMMON_PASSWORDS: &str = include_str!("../data/common-passwords.txt");
 
-/// Parole legate al contesto (SP 800-63B: "the name of the service").
-const CONTEXT_WORDS: [&[u8]; 1] = [b"pwdv"];
-
 /// Perché una password non può diventare la master password. Nessuna variante
 /// porta con sé la password o parti di essa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,8 +77,6 @@ pub enum Weakness {
     Repetitive,
     /// Caratteri consecutivi: "abcdef…", "987654…", "1234567890123…".
     Sequential,
-    /// Contiene il nome del programma.
-    ContextWord,
 }
 
 /// Controlla una password scelta come nuova master password (NIST SP 800-63B
@@ -106,8 +101,6 @@ pub fn check_new_master(password: &str) -> Result<(), Weakness> {
         Err(Weakness::Repetitive)
     } else if is_sequential(text) {
         Err(Weakness::Sequential)
-    } else if has_context_word(text) {
-        Err(Weakness::ContextWord)
     } else {
         Ok(())
     }
@@ -161,15 +154,6 @@ fn is_sequential(password: &str) -> bool {
         Some(first) if first == 1 || first == -1 => steps.all(|s| s == first),
         _ => false,
     }
-}
-
-fn has_context_word(password: &str) -> bool {
-    CONTEXT_WORDS.iter().any(|word| {
-        password
-            .as_bytes()
-            .windows(word.len())
-            .any(|window| window.eq_ignore_ascii_case(word))
-    })
 }
 
 #[cfg(test)]
@@ -274,21 +258,16 @@ mod tests {
         assert_eq!(check_new_master("abcdefgfedcbabcd"), Ok(()));
     }
 
+    /// SP 800-63B rev. 4 confronta l'intera password, non sottostringhe: il nome
+    /// del programma dentro una frase non è motivo di rifiuto (audit B2).
     #[test]
-    fn rejects_context_words() {
-        assert_eq!(
-            check_new_master("la mia PWDV di casa"),
-            Err(Weakness::ContextWord)
-        );
-        assert_eq!(
-            check_new_master("ｐｗｄｖ è la mia password"),
-            Err(Weakness::ContextWord)
-        );
+    fn program_name_inside_a_password_is_allowed() {
+        assert_eq!(check_new_master("la mia PWDV di casa sul lago"), Ok(()));
     }
 
     #[test]
     fn length_is_checked_first() {
-        // "pwdv" è corta: il motivo è la lunghezza, non la parola di contesto.
+        // L'intera password "pwdv" è rifiutata, ma dalla lunghezza minima.
         assert_eq!(check_new_master("pwdv"), Err(Weakness::TooShort));
     }
 

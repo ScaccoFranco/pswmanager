@@ -21,6 +21,11 @@ const MASTER_FIELD_CHARS: usize = MAX_PASSWORD_CHARS + 1;
 /// con la capacità già riservata e il limite di caratteri non succede mai.
 pub const PASSWORD_CAPACITY: usize = MASTER_FIELD_CHARS * 4;
 
+/// Dopo quanto una password rivelata torna mascherata (master password e voci).
+pub const REVEAL_FOR: Duration = Duration::from_secs(10);
+/// Larghezza fissa del pulsante "Mostra": il conto alla rovescia non sposta il campo.
+const REVEAL_BUTTON_WIDTH: f32 = 110.0;
+
 /// Mostrato quando la password supera il limite, allo sblocco e alla creazione.
 fn too_long_message() -> String {
     format!(
@@ -53,6 +58,9 @@ pub struct PasswordForm {
     failures: u32,
     retry_at: Option<Instant>,
     wants_focus: bool,
+    /// Fino a quando la master password resta visibile (NIST SP 800-63B,
+    /// §3.1.1.2; ADR 0010). Ogni azzeramento dei campi la rimaschera.
+    reveal_until: Option<Instant>,
     /// Enter nel primo campo della creazione: il focus passa alla conferma
     /// solo dopo che questa ha processato il frame, altrimenti consumerebbe
     /// lo stesso Enter e perderebbe subito il focus.
@@ -74,6 +82,7 @@ impl Default for PasswordForm {
             failures: 0,
             retry_at: None,
             wants_focus: true,
+            reveal_until: None,
             confirm_focus: false,
         }
     }
@@ -107,6 +116,20 @@ impl PasswordForm {
         self.wants_focus = true;
     }
 
+    /// Tempo per cui la password resta visibile, se è rivelata.
+    fn revealed(&self, now: Instant) -> Option<Duration> {
+        self.reveal_until
+            .and_then(|until| until.checked_duration_since(now))
+            .filter(|left| !left.is_zero())
+    }
+
+    fn toggle_reveal(&mut self, now: Instant) {
+        self.reveal_until = match self.revealed(now) {
+            Some(_) => None,
+            None => now.checked_add(REVEAL_FOR),
+        };
+    }
+
     fn retry_remaining(&self, now: Instant) -> Option<Duration> {
         self.retry_at
             .map(|at| at.saturating_duration_since(now))
@@ -125,6 +148,7 @@ impl PasswordForm {
     }
 
     fn wipe(&mut self, ctx: &egui::Context) {
+        self.reveal_until = None;
         wipe(&mut self.password);
         wipe(&mut self.confirm);
         forget_undo(ctx, PASSWORD_ID);
@@ -167,7 +191,10 @@ pub fn unlock_screen(
     path: &Path,
     busy: bool,
 ) -> FormAction {
-    let wait = form.retry_remaining(Instant::now());
+    let now = Instant::now();
+    let wait = form.retry_remaining(now);
+    let revealed = form.revealed(now);
+    let mut toggle = false;
     let mut action = FormAction::Idle;
 
     form_column(ui, |ui| {
@@ -177,9 +204,14 @@ pub fn unlock_screen(
         ui.add_space(16.0);
         theme::field_label(ui, "Master password");
 
-        let field = ui.add_enabled(
+        let field = password_row(
+            ui,
+            &mut form.password,
+            PASSWORD_ID,
+            "Master password",
             !busy,
-            password_field(&mut form.password, PASSWORD_ID, "Master password"),
+            revealed,
+            Some(&mut toggle),
         );
         if form.wants_focus && !busy {
             field.request_focus();
@@ -234,6 +266,7 @@ pub fn unlock_screen(
             action = FormAction::Back;
         }
     });
+    after_reveal_row(ui.ctx(), form, now, revealed, toggle);
     action
 }
 
@@ -243,6 +276,9 @@ pub fn create_screen(
     path: &Path,
     busy: bool,
 ) -> FormAction {
+    let now = Instant::now();
+    let revealed = form.revealed(now);
+    let mut toggle = false;
     let mut action = FormAction::Idle;
 
     form_column(ui, |ui| {
@@ -260,9 +296,14 @@ pub fn create_screen(
         ui.add_space(12.0);
         theme::field_label(ui, "Master password");
 
-        let first = ui.add_enabled(
+        let first = password_row(
+            ui,
+            &mut form.password,
+            PASSWORD_ID,
+            "Master password",
             !busy,
-            password_field(&mut form.password, PASSWORD_ID, "Master password"),
+            revealed,
+            Some(&mut toggle),
         );
         if form.wants_focus && !busy {
             first.request_focus();
@@ -277,9 +318,14 @@ pub fn create_screen(
         ));
         ui.add_space(4.0);
         theme::field_label(ui, "Conferma");
-        let second = ui.add_enabled(
+        let second = password_row(
+            ui,
+            &mut form.confirm,
+            CONFIRM_ID,
+            "Conferma master password",
             !busy,
-            password_field(&mut form.confirm, CONFIRM_ID, "Conferma master password"),
+            revealed,
+            None,
         );
         if form.confirm_focus && !busy {
             second.request_focus();
@@ -320,7 +366,27 @@ pub fn create_screen(
             action = FormAction::Back;
         }
     });
+    after_reveal_row(ui.ctx(), form, now, revealed, toggle);
     action
+}
+
+/// Dopo il disegno della schermata: applica il clic su "Mostra" e, finché la
+/// password è visibile, ridisegna per il conto alla rovescia e il rimascheramento.
+fn after_reveal_row(
+    ctx: &egui::Context,
+    form: &mut PasswordForm,
+    now: Instant,
+    revealed: Option<Duration>,
+    toggle: bool,
+) {
+    if toggle {
+        form.toggle_reveal(now);
+        // Il clic toglie il focus al campo: lo si restituisce.
+        form.wants_focus = true;
+    }
+    if let Some(left) = revealed {
+        ctx.request_repaint_after(left.min(Duration::from_millis(250)));
+    }
 }
 
 /// Perché la nuova master password non è accettabile, se non lo è. Il
@@ -341,7 +407,6 @@ fn new_master_problem(password: &str, confirm: &str) -> Option<String> {
             Sequential => {
                 "La master password non può essere una sequenza come abcd o 1234.".to_owned()
             }
-            ContextWord => "La master password non può contenere la parola \"pwdv\".".to_owned(),
         })
     } else if password != confirm {
         Some("Le password non coincidono.".to_owned())
@@ -350,15 +415,55 @@ fn new_master_problem(password: &str, confirm: &str) -> Option<String> {
     }
 }
 
-/// Campo sempre mascherato, senza toggle di visibilità.
-fn password_field<'a>(buf: &'a mut String, id: &str, hint: &'static str) -> egui::TextEdit<'a> {
+/// Riga con il campo della master password e, se `toggle` è presente, il
+/// pulsante "Mostra" accanto. Il campo è mascherato salvo `revealed`; senza
+/// pulsante (campo di conferma) lascia lo stesso spazio, per allineare i campi.
+fn password_row(
+    ui: &mut egui::Ui,
+    buf: &mut String,
+    id: &str,
+    hint: &'static str,
+    enabled: bool,
+    revealed: Option<Duration>,
+    toggle: Option<&mut bool>,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        let width = ui.available_width() - REVEAL_BUTTON_WIDTH - ui.spacing().item_spacing.x;
+        let field = ui.add_enabled(
+            enabled,
+            password_field(buf, id, hint, revealed.is_none()).desired_width(width),
+        );
+        if let Some(toggle) = toggle {
+            let label = match revealed {
+                Some(left) => format!("Nascondi ({} s)", left.as_millis().div_ceil(1000)),
+                None => "Mostra".to_owned(),
+            };
+            let size = egui::vec2(REVEAL_BUTTON_WIDTH, field.rect.height());
+            if ui
+                .add_enabled(enabled, egui::Button::new(label).min_size(size))
+                .clicked()
+            {
+                *toggle = true;
+            }
+        }
+        field
+    })
+    .inner
+}
+
+/// Campo della master password: mascherato salvo rivelazione esplicita.
+fn password_field<'a>(
+    buf: &'a mut String,
+    id: &str,
+    hint: &'static str,
+    masked: bool,
+) -> egui::TextEdit<'a> {
     egui::TextEdit::singleline(buf)
         .id(egui::Id::new(id))
-        .password(true)
+        .password(masked)
         .char_limit(MASTER_FIELD_CHARS)
         .hint_text(hint)
         .margin(FIELD_MARGIN)
-        .desired_width(f32::INFINITY)
 }
 
 /// Margine interno dei campi dei moduli: più ariosi dei campi compatti di egui.
@@ -529,6 +634,31 @@ mod tests {
         form.password
             .extend(std::iter::repeat_n('𝄞', MASTER_FIELD_CHARS));
         assert_eq!(form.password.as_ptr(), before);
+    }
+
+    #[test]
+    fn reveal_expires_toggles_and_is_cleared_by_every_wipe() {
+        let ctx = egui::Context::default();
+        let mut form = PasswordForm::default();
+        let now = Instant::now();
+        assert!(form.revealed(now).is_none());
+
+        form.toggle_reveal(now);
+        assert_eq!(form.revealed(now), Some(REVEAL_FOR));
+        assert!(form.revealed(now + REVEAL_FOR).is_none(), "scade da sola");
+
+        // Ancora visibile: un secondo clic la nasconde subito.
+        form.toggle_reveal(now);
+        assert!(form.revealed(now).is_none(), "il secondo clic nasconde");
+
+        form.toggle_reveal(now);
+        form.password.push_str("hunter2");
+        let _ = form.take_password(&ctx);
+        assert!(form.revealed(now).is_none(), "l'invio rimaschera");
+
+        form.toggle_reveal(now);
+        form.reset(&ctx);
+        assert!(form.revealed(now).is_none(), "il blocco rimaschera");
     }
 
     #[test]

@@ -108,7 +108,7 @@ impl PwdvApp {
     fn with_clipboard(clipboard: Clipboard) -> Self {
         PwdvApp {
             state: AppState::Welcome,
-            path_input: default_vault_path()
+            path_input: pwdv_core::store::default_vault_path()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             path: PathBuf::new(),
@@ -481,11 +481,6 @@ pub fn describe(err: &VaultError) -> String {
         }
         VaultError::Io(e) => format!("Errore di I/O ({e})."),
     }
-}
-
-/// Stesso default della CLI.
-fn default_vault_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".vault.pwdv"))
 }
 
 #[cfg(test)]

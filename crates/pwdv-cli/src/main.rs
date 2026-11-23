@@ -1,6 +1,7 @@
 //! CLI di pwdv. Le password si leggono solo dal terminale, mai dagli argomenti.
 
 use std::error::Error;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -175,6 +176,14 @@ fn get(path: &Path, name: &str) -> CliResult {
         .iter()
         .find(|e| e.name == name)
         .ok_or_else(|| format!("no entry named '{name}'"))?;
+    // Output rediretto (file, pipe): la password resterebbe in chiaro fuori
+    // dal vault. Solo un avviso, per non rompere gli script (audit I6).
+    if !std::io::stdout().is_terminal() {
+        eprintln!(
+            "pwdv: warning: stdout is not a terminal; \
+             the password is being written in clear text to a file or pipe"
+        );
+    }
     println!("name:     {}", entry.name);
     println!("username: {}", entry.username);
     println!("password: {}", entry.password);
@@ -241,9 +250,8 @@ fn rekey(path: &Path) -> CliResult {
 fn vault_path(arg: Option<PathBuf>) -> CliResult<PathBuf> {
     match arg {
         Some(path) => Ok(path),
-        None => std::env::var_os("HOME")
-            .map(|home| PathBuf::from(home).join(".vault.pwdv"))
-            .ok_or_else(|| "HOME is not set; pass --vault".into()),
+        None => store::default_vault_path()
+            .ok_or_else(|| "home directory not set (HOME or USERPROFILE); pass --vault".into()),
     }
 }
 
@@ -297,7 +305,6 @@ fn weakness_message(weakness: policy::Weakness) -> String {
         Common => "this password is in a list of common or leaked passwords".into(),
         Repetitive => "the master password must not be a repeated pattern".into(),
         Sequential => "the master password must not be a sequence like abcd or 1234".into(),
-        ContextWord => "the master password must not contain the word 'pwdv'".into(),
     }
 }
 

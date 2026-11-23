@@ -334,9 +334,10 @@ della CLI). Puoi scriverne un altro, poi premi **Apri** o **Invio**.
 
 1. Scegli una **master password** tra **15 e 256 caratteri** e scrivila nel primo campo.
    Sono rifiutate le password che compaiono in un elenco di password comuni o trafugate,
-   i blocchi ripetuti (`trottolatrottola`), le sequenze (`abcdef…`, `1234…`) e quelle che
-   contengono la parola "pwdv". Non ci sono regole su maiuscole, cifre o simboli.
-2. Premi **Invio** e riscrivila nel campo di conferma.
+   i blocchi ripetuti (`trottolatrottola`) e le sequenze (`abcdef…`, `1234…`). Non ci sono
+   regole su maiuscole, cifre o simboli.
+2. Premi **Invio** e riscrivila nel campo di conferma. Per controllare cosa hai scritto,
+   **Mostra** rivela entrambi i campi per 10 secondi.
 3. Premi **Invio** o **Crea vault**.
 
 > **La master password non è recuperabile.** Se la dimentichi, i dati del vault sono
@@ -348,7 +349,8 @@ Argon2id al lavoro.
 
 ### 5.3 Sblocca il vault
 
-Scrivi la master password e premi **Invio** o **Sblocca**.
+Scrivi la master password e premi **Invio** o **Sblocca**. **Mostra**, accanto al campo,
+la rende visibile per 10 secondi; torna mascherata da sola, al secondo clic o all'invio.
 
 - Con una password errata compare "Password errata o file danneggiato."
 - Dal terzo tentativo sbagliato consecutivo il pulsante resta disattivato per un
@@ -487,7 +489,10 @@ non vengono mai mostrate.
 pwdv get GitHub
 ```
 
-Attenzione: `get` stampa la password **in chiaro** nel terminale.
+Attenzione: `get` stampa la password **in chiaro** nel terminale, dove resta nello
+scrollback. Se l'output non va a un terminale (`pwdv get GitHub > file`, oppure una
+pipe), `get` funziona lo stesso ma scrive un avviso su stderr: la password finisce in
+chiaro fuori dal vault.
 
 ### Elimina una voce
 
@@ -502,7 +507,7 @@ pwdv passwd
 ```
 
 Chiede la password attuale e poi due volte la nuova (stesse regole di `init`: da 15 a 256
-caratteri, non comune, non ripetuta o in sequenza, senza "pwdv"). Viene ricifrata solo la DEK, e il
+caratteri, non comune, non ripetuta o in sequenza). Viene ricifrata solo la DEK, e il
 file `.bak` viene eliminato perché si aprirebbe ancora con la vecchia password.
 
 ### Sostituisci la chiave dei dati

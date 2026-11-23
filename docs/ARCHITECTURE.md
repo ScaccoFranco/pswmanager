@@ -61,9 +61,9 @@ flowchart LR
   - `crypto` — `derive_kek`, `seal`, `seal_with_key`, `reseal`, `open`, `open_with_key`, `change_master`, `VaultKey` (DEK + header[0..106], con `matches()` per rilevare riscritture)
   - `hardening` — `disable_core_dumps()`: chiamata per prima nel `main` di CLI e GUI (`RLIMIT_CORE = 0`, su Linux anche `PR_SET_DUMPABLE = 0`; nessuna operazione su Windows) — [ADR 0008](decisions/0008-disattivazione-core-dump.md). `lock_bytes` / `lock_string` (`mlock`, mai `munlock`) e `memory_lock_failed()` per avvisare l'utente — [ADR 0009](decisions/0009-blocco-in-ram-dei-segreti.md)
   - `key` — `Key32` (byte in `Box` bloccato in RAM, azzerato al drop, accesso via `as_bytes()`)
-  - `policy` — `MIN_MASTER_CHARS = 15`, `MAX_MASTER_CHARS = 256`, `too_long()`, `check_new_master()` → `Weakness` (lunghezza minima e massima, elenco comune incorporato da `data/common-passwords.txt`, ripetizioni, sequenze, parola "pwdv"); `nfkc()` usata da `crypto`. Applicata da CLI (`init`, `passwd`) e GUI (creazione), mai allo sblocco — ADR [0004](decisions/0004-lunghezza-minima-master-password.md), [0005](decisions/0005-normalizzazione-nfkc-master-password.md), [0006](decisions/0006-elenco-password-comuni.md)
+  - `policy` — `MIN_MASTER_CHARS = 15`, `MAX_MASTER_CHARS = 256`, `too_long()`, `check_new_master()` → `Weakness` (lunghezza minima e massima, elenco comune incorporato da `data/common-passwords.txt`, ripetizioni, sequenze); `nfkc()` usata da `crypto`. Applicata da CLI (`init`, `passwd`) e GUI (creazione), mai allo sblocco — ADR [0004](decisions/0004-lunghezza-minima-master-password.md), [0005](decisions/0005-normalizzazione-nfkc-master-password.md), [0006](decisions/0006-elenco-password-comuni.md)
   - `vault` — `Entry`, `VaultData`, `DATA_VERSION = 1`
-  - `store` — `load`, `load_with_key`, `save`, `save_with_key`, `create`, `change_password`, `rekey`
+  - `store` — `default_vault_path` (`HOME`, `USERPROFILE` su Windows), `load`, `load_with_key`, `save`, `save_with_key`, `create`, `change_password`, `rekey`
   - `error` — `VaultError` (`BadMagic`, `UnsupportedVersion`, `Truncated`, `AuthFailed`, `Malformed`, `Conflict`, `Kdf`, `Io`)
 - **Dati posseduti**: il file `.pwdv` e `<vault>.bak`.
 
@@ -78,7 +78,7 @@ flowchart LR
 - **Dipende da**: pwdv-core, eframe, arboard, zeroize.
 - **Moduli**:
   - `app` — macchina a stati `AppState`: `Welcome` → `Creating` | `Unlocking` → `Unlocked(Box<Session>)`; `Error(String)`. `Unlocking` è anche lo stato "bloccato".
-  - `unlock` — schermate di sblocco/creazione, buffer password a capacità fissa, backoff dopo 3 errori.
+  - `unlock` — schermate di sblocco/creazione, buffer password a capacità fissa (bloccati in RAM), rifiuto oltre 256 caratteri, "Mostra" per 10 s ([ADR 0010](decisions/0010-mostra-master-password.md)), backoff dopo 3 errori.
   - `worker` — Argon2id su thread dedicato, risultato su `mpsc` letto con `try_recv()` a ogni frame.
   - `main_view` — elenco con ricerca fuzzy, dettaglio, modifica, eliminazione con conferma per nome.
   - `security` — `IdleTimer` (doppio orologio `Instant` + system time, per la sospensione) e `Clipboard` che si svuota dopo 20 s.
@@ -155,17 +155,18 @@ Wayland/X11, AT-SPI (accessibilità).
 
 ## Configurazione e deploy
 
-- **Variabili d'ambiente**: `HOME` (default `~/.vault.pwdv` in CLI e GUI), `PWDV_AUTOLOCK_SECONDS` (GUI, 10–86400).
+- **Variabili d'ambiente**: `HOME` (`USERPROFILE` su Windows) per il default `.vault.pwdv` in CLI e GUI, `PWDV_AUTOLOCK_SECONDS` (GUI, 10–86400).
 - **Build**: `cargo build --release` (in debug Argon2 è molto lento).
 - **Installazione Linux**: `./install.sh` → `~/.local/bin`, voce `.desktop` da `packaging/linux/pwdv.desktop.in`, icona SVG; `PREFIX` configurabile. `./uninstall.sh` per rimuovere.
 - **CI**: GitHub Actions (`.github/workflows/ci.yml`), solo Linux: `cargo fmt --check`, `cargo clippy --locked … -D warnings`, `cargo test --locked --workspace` a ogni push su `main` e a ogni PR; `cargo audit` (RustSec) anche ogni lunedì.
 
 ## Punti aperti / debito tecnico
 
-- **Multipiattaforma (obiettivo) non ancora coperto**: default del vault basato su `HOME` (assente su Windows); permessi `0600`, sync della directory, disattivazione dei core dump e `mlock` solo `#[cfg(unix)]` (su Windows manca `VirtualLock`); MIME `x-kde-passwordManagerHint` solo Linux; `install.sh` e packaging solo Linux; nessun test su macOS/Windows.
+- **Multipiattaforma (obiettivo) non ancora coperto**: permessi `0600`, sync della directory, disattivazione dei core dump e `mlock` solo `#[cfg(unix)]` (su Windows mancano `VirtualLock` e ACL ristrette sul file, che richiedono `windows-sys`: rimandati); il codice `cfg(windows)` non è mai stato compilato; MIME `x-kde-passwordManagerHint` solo Linux; `install.sh` e packaging solo Linux; nessun test su macOS/Windows.
 - Generatore di password solo in CLI; tema chiaro/scuro assente (obiettivi correnti).
 - `CLAUDE.md` parla di stato `Locked`, nel codice lo stato bloccato è `AppState::Unlocking`.
 - Due GUI sullo stesso vault possono sovrascriversi (`Conflict` rileva solo cambi di chiave, non di contenuto).
+- `zvariant`, `zvariant_derive`, `zbus_names` non più mantenuti (RUSTSEC-2026-0370/0371/0372), via `eframe → accesskit_unix`: da risolvere aggiornando eframe quando passerà a `zbus` 6.
 - Copie non azzerabili in egui/winit/arboard (documentato nel README §9).
 - La CI gira solo su Linux: nessun test automatico su macOS e Windows.
 - Elenco di password comuni statico (SecLists xato-net, 10.898 voci ≥ 15 caratteri): non si aggiorna da solo e non copre le violazioni recenti (ADR 0006).

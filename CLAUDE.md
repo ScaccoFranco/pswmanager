@@ -81,7 +81,7 @@ I parametri KDF e il salt sono esclusi dall'AAD del vault per consentire il camb
 - La derivazione Argon2id non viene mai eseguita sul thread della UI. Thread separato + canale, spinner durante l'attesa.
 - Buffer della master password: `String` dedicata, dopo l'invio `zeroize()` e poi `clear()`. Mai solo `clear()`.
 - Nessuna struct che contiene password decifrate deriva `Debug`, `Serialize` o `Clone`.
-- Nessun segreto in titolo finestra, tooltip, log, messaggi di errore, o nel testo di un widget non mascherato.
+- Nessun segreto in titolo finestra, tooltip, log, messaggi di errore, o nel testo di un widget non mascherato. Unica eccezione: la rivelazione temporanea (10 s) chiesta esplicitamente con "Mostra", per le voci e per la master password (ADR 0010).
 - Auto-lock: alla scadenza del timer la DEK e i dati del vault vengono zeroizzati e lo stato torna a `Locked` (nel codice: `AppState::Unlocking`). Non è sufficiente cambiare schermata.
 - Gli errori mostrati all'utente non distinguono password sbagliata da file manomesso.
 - Fuori scope, da dichiarare nel README: protezione da screenshot, keylogger, screen recording e clipboard manager di terze parti.

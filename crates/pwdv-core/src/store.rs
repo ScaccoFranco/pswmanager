@@ -18,6 +18,22 @@ use crate::error::VaultError;
 use crate::format::KdfParams;
 use crate::vault::{VaultData, DATA_VERSION};
 
+/// Nome del file del vault predefinito, nella cartella dell'utente.
+pub const DEFAULT_VAULT_NAME: &str = ".vault.pwdv";
+
+/// Percorso predefinito del vault, condiviso da CLI e GUI: `$HOME/.vault.pwdv`
+/// su unix, `%USERPROFILE%\.vault.pwdv` su Windows (dove `HOME` di solito non
+/// esiste). `None` se la variabile manca o è vuota.
+pub fn default_vault_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    const HOME_VAR: &str = "USERPROFILE";
+    #[cfg(not(windows))]
+    const HOME_VAR: &str = "HOME";
+    std::env::var_os(HOME_VAR)
+        .filter(|home| !home.is_empty())
+        .map(|home| PathBuf::from(home).join(DEFAULT_VAULT_NAME))
+}
+
 pub fn load(path: &Path, password: &[u8]) -> Result<VaultData, VaultError> {
     load_with_key(path, password).map(|(_, data)| data)
 }

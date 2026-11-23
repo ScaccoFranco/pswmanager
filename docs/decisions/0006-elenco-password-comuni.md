@@ -24,7 +24,10 @@ comuni più corte sono già escluse, ma ne restano di lunghe e molto diffuse
   3. `Repetitive`: un blocco più corto ripetuto per intero (`xxxx…`, `abcabc…`);
   4. `Sequential`: ogni carattere segue il precedente di +1 o -1 nello stesso verso, con
      `9→0` e `0→9` come passi tra cifre;
-  5. `ContextWord`: contiene `pwdv`, senza distinguere maiuscole e minuscole.
+  5. ~~`ContextWord`: contiene `pwdv`~~ — rimosso il 2026-11-23 (audit, rilievo B2): SP
+     800-63B rev. 4 chiede di confrontare l'intera password, non sottostringhe, e
+     l'intera password "pwdv" (o una sua ripetizione) è già rifiutata da `TooShort` e
+     `Repetitive`.
 - Il confronto non crea copie della password: avviene carattere per carattere.
 - `Weakness` non porta con sé la password; CLI (in inglese) e GUI (in italiano)
   traducono la variante in un messaggio.

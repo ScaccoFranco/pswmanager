@@ -12,7 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::app::{self, Session};
 use crate::security::{Clipboard, Now};
 use crate::theme::{self, WideButton};
-use crate::unlock::{self, MAX_PASSWORD_CHARS, PASSWORD_CAPACITY};
+use crate::unlock::{self, MAX_PASSWORD_CHARS, PASSWORD_CAPACITY, REVEAL_FOR};
 
 const LIST_WIDTH: f32 = 300.0;
 /// Larghezza dei campi del modulo: in una `Grid` la larghezza infinita non ha limite.
@@ -26,8 +26,6 @@ const LABEL_WIDTH: f32 = 96.0;
 const FIELD_ROW_HEIGHT: f32 = 32.0;
 /// Larghezza massima del contenuto del pannello di destra.
 const DETAIL_WIDTH: f32 = 620.0;
-/// Dopo quanto una password rivelata torna mascherata.
-const REVEAL_FOR: Duration = Duration::from_secs(10);
 /// Sempre lo stesso numero di pallini: la lunghezza della password non trapela.
 const MASK: &str = "••••••••••";
 const PASSWORD_ID: &str = "pwdv-entry-password";
