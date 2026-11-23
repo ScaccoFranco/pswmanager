@@ -5,6 +5,9 @@ members = ["crates/pwdv-core", "crates/pwdv-cli", "crates/pwdv-gui"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+# Doppia licenza: GPL-3.0-or-later, oppure licenza commerciale dall'autore (README §11, ADR 0012).
+license = "GPL-3.0-or-later"
+authors = ["Samuele Franco"]
 
 [workspace.dependencies]
 pwdv-core = { path = "crates/pwdv-core" }

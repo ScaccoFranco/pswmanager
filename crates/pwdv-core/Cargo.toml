@@ -2,6 +2,8 @@
 name = "pwdv-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
 argon2.workspace = true

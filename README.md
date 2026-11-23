@@ -29,6 +29,7 @@ Il progetto offre due programmi che usano lo stesso formato di file:
 8. [Backup e recupero](#8-backup-e-recupero)
 9. [Limiti noti](#9-limiti-noti)
 10. [Sviluppo](#10-sviluppo)
+11. [Licenza](#11-licenza)
 
 ---
 
@@ -678,3 +679,35 @@ Le regole complete sono in [`CLAUDE.md`](CLAUDE.md). In sintesi:
   `Debug`, `Clone` o `Serialize`;
 - nessun segreto in log, messaggi di errore o testo non mascherato;
 - nessuna nuova dipendenza senza una richiesta esplicita.
+
+---
+
+## 11. Licenza
+
+Copyright (C) 2026 Samuele Franco.
+
+pwdv è distribuito con **doppia licenza**: puoi scegliere quella che ti serve.
+
+- **GNU General Public License v3.0 o successiva** ([`LICENSE`](LICENSE)), gratuita.
+  Puoi usare pwdv per qualunque scopo, anche in un'azienda, studiarlo, modificarlo e
+  ridistribuirlo. Se distribuisci pwdv o un programma derivato, anche a pagamento,
+  devi farlo con la stessa licenza e fornire il codice sorgente completo.
+- **Licenza commerciale**, a pagamento. Serve se vuoi includere pwdv, o codice
+  derivato, in un prodotto che non viene rilasciato sotto GPL (per esempio un prodotto
+  chiuso che vendi). Condizioni e prezzo si concordano con l'autore: contattalo
+  tramite il profilo GitHub [ScaccoFranco](https://github.com/ScaccoFranco).
+
+Il software è fornito "così com'è", senza alcuna garanzia (sezioni 15 e 16 della GPL).
+
+**Contributi.** Per poter mantenere la doppia licenza, i contributi esterni sono
+accettati solo con un accordo scritto che conceda all'autore il diritto di distribuirli
+anche con la licenza commerciale. Apri una issue prima di proporre modifiche.
+
+**Componenti di terzi.** L'elenco di password comuni in `crates/pwdv-core/data/` viene
+da [SecLists](https://github.com/danielmiessler/SecLists) (licenza MIT,
+[`LICENSE-SecLists`](crates/pwdv-core/data/LICENSE-SecLists)). Le dipendenze Rust hanno
+licenze compatibili con la GPL-3.0 (MIT, Apache-2.0, BSD, Zlib, ISC, BSL-1.0,
+Unicode-3.0). I font incorporati nella GUI da egui (`epaint_default_fonts`) restano
+sotto le proprie licenze per font (SIL Open Font License 1.1 e Ubuntu Font Licence
+1.0), che ne permettono la distribuzione insieme al programma. Chi distribuisce i
+binari deve includere gli avvisi di copyright di tutti questi componenti.

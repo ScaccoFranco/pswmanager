@@ -2,6 +2,8 @@
 name = "pwdv-gui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
 pwdv-core.workspace = true

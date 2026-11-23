@@ -2,6 +2,8 @@
 name = "pwdv-cli"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 # Il binario resta `pwdv`, come prima della divisione in workspace.
 [[bin]]
