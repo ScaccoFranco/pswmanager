@@ -90,13 +90,25 @@ impl Charset {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    // Prima di leggere qualunque segreto: un crash non deve salvarli su disco.
+    if let Err(e) = pwdv_core::hardening::disable_core_dumps() {
+        eprintln!("pwdv: cannot disable core dumps: {e}");
+        return ExitCode::FAILURE;
+    }
+    let code = match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("pwdv: {e}");
             ExitCode::FAILURE
         }
+    };
+    if pwdv_core::hardening::memory_lock_failed() {
+        eprintln!(
+            "pwdv: warning: could not lock keys and passwords in RAM; \
+             they may have been written to swap (use encrypted swap, see README)"
+        );
     }
+    code
 }
 
 fn run(cli: Cli) -> CliResult {
@@ -185,7 +197,12 @@ fn list(path: &Path) -> CliResult {
     let mut entries: Vec<&Entry> = data.entries.iter().collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     for e in entries {
-        println!("{}\t{}\t{}", e.name, e.username, e.url.as_deref().unwrap_or(""));
+        println!(
+            "{}\t{}\t{}",
+            e.name,
+            e.username,
+            e.url.as_deref().unwrap_or("")
+        );
     }
     Ok(())
 }
@@ -246,7 +263,11 @@ fn require_vault(path: &Path) -> CliResult {
 }
 
 fn prompt(label: &str) -> CliResult<Zeroizing<String>> {
-    Ok(Zeroizing::new(rpassword::prompt_password(label)?))
+    let password = Zeroizing::new(rpassword::prompt_password(label)?);
+    // Bloccata dopo la lettura: `rpassword` alloca da sé il buffer, quindi la
+    // protezione vale da qui in poi (ADR 0009).
+    pwdv_core::hardening::lock_string(&password);
+    Ok(password)
 }
 
 fn prompt_new(label: &str) -> CliResult<Zeroizing<String>> {
@@ -268,6 +289,10 @@ fn weakness_message(weakness: policy::Weakness) -> String {
         TooShort => format!(
             "master password must be at least {} characters",
             policy::MIN_MASTER_CHARS
+        ),
+        TooLong => format!(
+            "master password must be at most {} characters",
+            policy::MAX_MASTER_CHARS
         ),
         Common => "this password is in a list of common or leaked passwords".into(),
         Repetitive => "the master password must not be a repeated pattern".into(),

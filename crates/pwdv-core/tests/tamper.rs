@@ -120,7 +120,11 @@ fn tampering_any_authenticated_field_is_auth_failed() {
     assert_eq!(fields[0].1.start, 6);
     assert_eq!(fields[fields.len() - 1].1.end, file.len());
     for pair in fields.windows(2) {
-        assert_eq!(pair[0].1.end, pair[1].1.start, "{} / {}", pair[0].0, pair[1].0);
+        assert_eq!(
+            pair[0].1.end, pair[1].1.start,
+            "{} / {}",
+            pair[0].0, pair[1].0
+        );
     }
     assert!(fields.iter().all(|(_, r)| r.len() >= 3));
 
@@ -180,7 +184,11 @@ fn two_seals_share_no_salt_nonce_or_ciphertext() {
     let a = seal(PW, PLAINTEXT, FAST).unwrap();
     let b = seal(PW, PLAINTEXT, FAST).unwrap();
 
-    assert_eq!(&a[0..18], &b[0..18], "stessi magic, version, kdf_id, parametri");
+    assert_eq!(
+        &a[0..18],
+        &b[0..18],
+        "stessi magic, version, kdf_id, parametri"
+    );
     for (name, range) in [
         ("salt", 18..34),
         ("dek_nonce", 34..58),
@@ -206,7 +214,11 @@ fn change_master_rewraps_without_touching_vault() {
         let changed = change_master(b"old", b"new", &file, params).unwrap();
 
         assert_eq!(changed.len(), file.len());
-        assert_eq!(&changed[106..], &file[106..], "vault_nonce e ciphertext intatti");
+        assert_eq!(
+            &changed[106..],
+            &file[106..],
+            "vault_nonce e ciphertext intatti"
+        );
         assert_eq!(&changed[0..6], &file[0..6]);
         assert_eq!(&changed[6..10], &params.m_cost.to_le_bytes());
         assert_ne!(&changed[18..34], &file[18..34], "salt nuovo");
@@ -218,5 +230,8 @@ fn change_master_rewraps_without_touching_vault() {
     }
 
     let wrong_old = change_master(b"wrong", b"new", &file, FAST).map(drop);
-    assert!(matches!(wrong_old, Err(VaultError::AuthFailed)), "{wrong_old:?}");
+    assert!(
+        matches!(wrong_old, Err(VaultError::AuthFailed)),
+        "{wrong_old:?}"
+    );
 }

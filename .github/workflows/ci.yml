@@ -1,0 +1,60 @@
+# CI di pwdv: gli stessi controlli che CLAUDE.md richiede a fine step, più il
+# controllo delle vulnerabilità note nelle dipendenze (audit 2026-11-23, B5).
+# Nessun segreto, nessun artefatto pubblicato: permessi in sola lettura.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Le segnalazioni RustSec escono anche senza modifiche al codice.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: test, clippy, fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      # Librerie di sviluppo che eframe/winit cercano su Linux (X11 e Wayland).
+      - name: Dipendenze di sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libwayland-dev
+      - name: Formattazione
+        run: cargo fmt --all --check
+      # --locked: si compila esattamente il Cargo.lock versionato.
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked --workspace
+
+  audit:
+    name: vulnerabilità delle dipendenze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Installa cargo-audit
+        run: cargo install cargo-audit --locked
+      # Fallisce sulle vulnerabilità; i crate non mantenuti (es. RUSTSEC-2026-0370)
+      # restano avvisi, vedi audit B9.
+      - name: cargo audit
+        run: cargo audit

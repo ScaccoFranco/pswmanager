@@ -355,7 +355,10 @@ mod tests {
         assert_eq!(loaded.version, DATA_VERSION);
         assert_eq!(passwords(&loaded), passwords(&original));
         for (a, b) in loaded.entries.iter().zip(&original.entries) {
-            assert_eq!((&a.name, &a.username, &a.url, &a.notes), (&b.name, &b.username, &b.url, &b.notes));
+            assert_eq!(
+                (&a.name, &a.username, &a.url, &a.notes),
+                (&b.name, &b.username, &b.url, &b.notes)
+            );
             assert_eq!((a.created, a.modified), (b.created, b.modified));
         }
     }
@@ -372,7 +375,10 @@ mod tests {
 
         assert_eq!(dir.listing(), ["vault.pwdv", "vault.pwdv.bak"]);
         assert_eq!(fs::read(backup_path(&vault)).unwrap(), first);
-        assert_eq!(passwords(&load(&backup_path(&vault), b"pw").unwrap()), ["first"]);
+        assert_eq!(
+            passwords(&load(&backup_path(&vault), b"pw").unwrap()),
+            ["first"]
+        );
         assert_eq!(passwords(&load(&vault, b"pw").unwrap()), ["second"]);
     }
 
@@ -394,7 +400,10 @@ mod tests {
     fn load_with_wrong_password_is_auth_failed() {
         let dir = TempDir::new("wrongpw");
         save_with_params(&dir.vault(), b"pw", &data(&["a"]), FAST).unwrap();
-        assert!(matches!(load(&dir.vault(), b"nope"), Err(VaultError::AuthFailed)));
+        assert!(matches!(
+            load(&dir.vault(), b"nope"),
+            Err(VaultError::AuthFailed)
+        ));
     }
 
     #[test]
@@ -555,7 +564,10 @@ mod tests {
         assert_eq!(&saved[..106], &created[..106]);
         assert_ne!(&saved[106..130], &created[106..130]);
         assert_eq!(fs::read(backup_path(&vault)).unwrap(), created);
-        assert_eq!(passwords(&load(&vault, b"pw").unwrap()), ["first", "second"]);
+        assert_eq!(
+            passwords(&load(&vault, b"pw").unwrap()),
+            ["first", "second"]
+        );
 
         let (reopened, loaded) = load_with_key(&vault, b"pw").unwrap();
         assert_eq!(passwords(&loaded), ["first", "second"]);
@@ -592,7 +604,11 @@ mod tests {
             matches!(result, Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists)
         );
         assert_eq!(fs::read(&vault).unwrap(), b"creato da un altro processo");
-        assert_eq!(dir.listing(), ["vault.pwdv"], "nessun temporaneo lasciato indietro");
+        assert_eq!(
+            dir.listing(),
+            ["vault.pwdv"],
+            "nessun temporaneo lasciato indietro"
+        );
     }
 
     /// Su un percorso libero `write_new` si comporta come `write_atomic`:
@@ -622,7 +638,9 @@ mod tests {
         fs::write(&vault, b"not a vault").unwrap();
 
         let result = create_with_params(&vault, b"pw", &data(&[]), FAST);
-        assert!(matches!(result, Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists));
+        assert!(
+            matches!(result, Err(VaultError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists)
+        );
         assert_eq!(fs::read(&vault).unwrap(), b"not a vault");
     }
 }

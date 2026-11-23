@@ -4,17 +4,30 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use pwdv_core::policy;
+use pwdv_core::{hardening, policy};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::theme::{self, WideButton};
 
-/// Il campo non accetta più caratteri di così.
-pub const MAX_PASSWORD_CHARS: usize = 256;
+/// Lunghezza massima di una password, uguale a quella della CLI.
+pub const MAX_PASSWORD_CHARS: usize = policy::MAX_MASTER_CHARS;
+/// Il campo della master password accetta un carattere oltre il limite: egui
+/// tronca il testo incollato in silenzio, e quel carattere in più permette di
+/// accorgersene e rifiutare la password con un messaggio invece di inviarne
+/// una versione troncata.
+const MASTER_FIELD_CHARS: usize = MAX_PASSWORD_CHARS + 1;
 /// Capacità riservata ai buffer: 4 byte coprono qualunque carattere UTF-8.
 /// Una `String` che cresce rialloca e libera il buffer vecchio senza azzerarlo;
 /// con la capacità già riservata e il limite di caratteri non succede mai.
-pub const PASSWORD_CAPACITY: usize = MAX_PASSWORD_CHARS * 4;
+pub const PASSWORD_CAPACITY: usize = MASTER_FIELD_CHARS * 4;
+
+/// Mostrato quando la password supera il limite, allo sblocco e alla creazione.
+fn too_long_message() -> String {
+    format!(
+        "La master password supera i {} caratteri e non viene troncata.",
+        MAX_PASSWORD_CHARS
+    )
+}
 
 const PASSWORD_ID: &str = "pwdv-master-password";
 const CONFIRM_ID: &str = "pwdv-master-confirm";
@@ -48,9 +61,14 @@ pub struct PasswordForm {
 
 impl Default for PasswordForm {
     fn default() -> Self {
+        let password = String::with_capacity(PASSWORD_CAPACITY);
+        let confirm = String::with_capacity(PASSWORD_CAPACITY);
+        // Bloccati in RAM una volta sola: la capacità non cambia mai (ADR 0009).
+        hardening::lock_string(&password);
+        hardening::lock_string(&confirm);
         PasswordForm {
-            password: String::with_capacity(PASSWORD_CAPACITY),
-            confirm: String::with_capacity(PASSWORD_CAPACITY),
+            password,
+            confirm,
             notice: None,
             info: None,
             failures: 0,
@@ -98,7 +116,9 @@ impl PasswordForm {
     /// Copia la password per il worker e azzera entrambi i campi. La copia ha
     /// la capacità esatta, quindi non rialloca; il worker la azzera dopo l'uso.
     fn take_password(&mut self, ctx: &egui::Context) -> Zeroizing<String> {
-        let password = Zeroizing::new(self.password.as_str().to_owned());
+        let mut password = Zeroizing::new(String::with_capacity(self.password.len()));
+        hardening::lock_string(&password);
+        password.push_str(&self.password);
         self.wipe(ctx);
         self.notice = None;
         password
@@ -153,6 +173,7 @@ pub fn unlock_screen(
     form_column(ui, |ui| {
         ui.heading("Sblocca il vault");
         path_line(ui, path);
+        memory_lock_warning(ui);
         ui.add_space(16.0);
         theme::field_label(ui, "Master password");
 
@@ -172,7 +193,14 @@ pub fn unlock_screen(
             .clicked();
 
         if can_submit && (enter || clicked) {
-            action = FormAction::Submit(form.take_password(ui.ctx()));
+            if policy::too_long(&form.password) {
+                // Nessun tentativo: non conta per l'attesa dopo gli errori.
+                form.wipe(ui.ctx());
+                form.notice = Some(too_long_message());
+                form.wants_focus = true;
+            } else {
+                action = FormAction::Submit(form.take_password(ui.ctx()));
+            }
         } else if enter {
             form.wants_focus = true;
         }
@@ -220,6 +248,7 @@ pub fn create_screen(
     form_column(ui, |ui| {
         ui.heading("Crea un nuovo vault");
         path_line(ui, path);
+        memory_lock_warning(ui);
         ui.add_space(12.0);
         theme::callout(
             ui,
@@ -304,6 +333,7 @@ fn new_master_problem(password: &str, confirm: &str) -> Option<String> {
                 "La master password deve avere almeno {} caratteri.",
                 policy::MIN_MASTER_CHARS
             ),
+            TooLong => too_long_message(),
             Common => "Questa password compare in un elenco di password comuni o \
                        trafugate: scegline un'altra."
                 .to_owned(),
@@ -325,7 +355,7 @@ fn password_field<'a>(buf: &'a mut String, id: &str, hint: &'static str) -> egui
     egui::TextEdit::singleline(buf)
         .id(egui::Id::new(id))
         .password(true)
-        .char_limit(MAX_PASSWORD_CHARS)
+        .char_limit(MASTER_FIELD_CHARS)
         .hint_text(hint)
         .margin(FIELD_MARGIN)
         .desired_width(f32::INFINITY)
@@ -342,6 +372,22 @@ fn path_line(ui: &mut egui::Ui, path: &Path) {
         .monospace()
         .color(theme::TEXT_WEAK);
     ui.add(egui::Label::new(text).truncate());
+}
+
+/// Avviso se il sistema non ha permesso di bloccare in RAM chiavi e
+/// password (ADR 0009): possono finire nello swap.
+fn memory_lock_warning(ui: &mut egui::Ui) {
+    if hardening::memory_lock_failed() {
+        ui.add_space(8.0);
+        theme::callout(
+            ui,
+            theme::WARN,
+            theme::WARN_DIM,
+            "Il sistema non ha permesso di bloccare in RAM chiavi e password: \
+             potrebbero essere scritte nello swap. Usa uno swap cifrato \
+             (vedi README, sezione 1).",
+        );
+    }
 }
 
 /// Enter in un campo a riga singola: egui gli toglie il focus nello stesso frame.
@@ -460,7 +506,10 @@ mod tests {
 
         let common = new_master_problem("1qaz2wsx3edc4rfv", "1qaz2wsx3edc4rfv").unwrap();
         assert!(common.contains("comuni"));
-        assert!(!common.contains("1qaz"), "il messaggio non cita la password");
+        assert!(
+            !common.contains("1qaz"),
+            "il messaggio non cita la password"
+        );
         let repeated = "x".repeat(20);
         assert!(new_master_problem(&repeated, &repeated)
             .unwrap()
@@ -478,7 +527,15 @@ mod tests {
         let mut form = PasswordForm::default();
         let before = form.password.as_ptr();
         form.password
-            .extend(std::iter::repeat_n('𝄞', MAX_PASSWORD_CHARS));
+            .extend(std::iter::repeat_n('𝄞', MASTER_FIELD_CHARS));
         assert_eq!(form.password.as_ptr(), before);
+    }
+
+    #[test]
+    fn new_master_over_the_limit_is_rejected_not_truncated() {
+        let long = "a".repeat(MASTER_FIELD_CHARS);
+        assert_eq!(new_master_problem(&long, &long), Some(too_long_message()));
+        assert!(policy::too_long(&long));
+        assert!(!policy::too_long(&long[..MAX_PASSWORD_CHARS]));
     }
 }

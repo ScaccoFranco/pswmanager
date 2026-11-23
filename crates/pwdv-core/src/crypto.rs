@@ -40,15 +40,18 @@ pub fn derive_kek(
     params: &KdfParams,
 ) -> Result<Key32, VaultError> {
     if params.m_cost > MAX_M_COST || params.t_cost > MAX_T_COST || params.p_cost > MAX_P_COST {
-        return Err(VaultError::Kdf("KDF parameters above allowed limits".into()));
+        return Err(VaultError::Kdf(
+            "KDF parameters above allowed limits".into(),
+        ));
     }
     let argon2_params = Params::new(params.m_cost, params.t_cost, params.p_cost, Some(32))
         .map_err(|e| VaultError::Kdf(e.to_string()))?;
     let argon2 = Argon2::new(ARGON2_ALGORITHM, ARGON2_VERSION, argon2_params);
 
-    let mut kek = Zeroizing::new([0u8; 32]);
-    hash_into(&argon2, password, salt, &mut *kek)?;
-    Ok(Key32::from_bytes(*kek))
+    // Scritta direttamente nel buffer bloccato in RAM, senza copie sullo stack.
+    let mut kek = Key32::locked_zeroed();
+    hash_into(&argon2, password, salt, kek.as_mut_bytes())?;
+    Ok(kek)
 }
 
 /// `hash_password_into` libera la matrice di Argon2 senza azzerarla, e dai
@@ -163,7 +166,12 @@ pub fn open_with_key(
     let (header, ciphertext) = Header::parse(file)?;
     let header_bytes = raw_header(file)?;
     let dek = unwrap_dek(password, &header, header_bytes)?;
-    let plaintext = decrypt(&dek, &header.vault_nonce, &vault_aad(header_bytes), ciphertext)?;
+    let plaintext = decrypt(
+        &dek,
+        &header.vault_nonce,
+        &vault_aad(header_bytes),
+        ciphertext,
+    )?;
     Ok((VaultKey::new(dek, header_bytes), plaintext))
 }
 
@@ -178,7 +186,12 @@ pub fn change_master(
     let dek = unwrap_dek(old, &header, header_bytes)?;
     // Verifica anche il tag del vault: un ciphertext corrotto non va
     // ri-autorizzato sotto una nuova password.
-    decrypt(&dek, &header.vault_nonce, &vault_aad(header_bytes), ciphertext)?;
+    decrypt(
+        &dek,
+        &header.vault_nonce,
+        &vault_aad(header_bytes),
+        ciphertext,
+    )?;
 
     let new_header = wrap_dek(new, &dek, params, header.vault_nonce)?;
     let mut out = Vec::with_capacity(file.len());
@@ -247,11 +260,19 @@ fn unwrap_dek_raw(
 ) -> Result<Key32, VaultError> {
     // Parametri KDF e salt non sono ancora autenticati: se vengono rifiutati il
     // file è manomesso o corrotto, e deve essere indistinguibile da un tag errato.
-    let kek = derive_kek(password, &header.salt, &header.kdf)
+    let kek =
+        derive_kek(password, &header.salt, &header.kdf).map_err(|_| VaultError::AuthFailed)?;
+    let dek = decrypt(
+        &kek,
+        &header.dek_nonce,
+        &dek_aad(header_bytes),
+        &header.wrapped_dek,
+    )?;
+    let dek: &[u8; 32] = dek
+        .as_slice()
+        .try_into()
         .map_err(|_| VaultError::AuthFailed)?;
-    let dek = decrypt(&kek, &header.dek_nonce, &dek_aad(header_bytes), &header.wrapped_dek)?;
-    let dek: &[u8; 32] = dek.as_slice().try_into().map_err(|_| VaultError::AuthFailed)?;
-    Ok(Key32::from_bytes(*dek))
+    Ok(Key32::from_bytes(dek))
 }
 
 /// I 130 byte di header così come sono nel file: le AAD si calcolano su questi,
@@ -289,7 +310,13 @@ fn encrypt(
     plaintext: &[u8],
 ) -> Result<Vec<u8>, VaultError> {
     XChaCha20Poly1305::new(key.as_bytes().into())
-        .encrypt(nonce.into(), Payload { msg: plaintext, aad })
+        .encrypt(
+            nonce.into(),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| encryption_failed())
 }
 
@@ -352,17 +379,29 @@ mod tests {
     #[test]
     fn equivalent_spellings_open_the_same_vault() {
         let file = seal(DECOMPOSED.as_bytes(), b"secret", FAST).unwrap();
-        assert_eq!(open(COMPOSED.as_bytes(), &file).unwrap().as_slice(), b"secret");
-        assert_eq!(open(DECOMPOSED.as_bytes(), &file).unwrap().as_slice(), b"secret");
+        assert_eq!(
+            open(COMPOSED.as_bytes(), &file).unwrap().as_slice(),
+            b"secret"
+        );
+        assert_eq!(
+            open(DECOMPOSED.as_bytes(), &file).unwrap().as_slice(),
+            b"secret"
+        );
 
         let file = seal(LIGATURE.as_bytes(), b"secret", FAST).unwrap();
-        assert_eq!(open(b"fine del vault", &file).unwrap().as_slice(), b"secret");
+        assert_eq!(
+            open(b"fine del vault", &file).unwrap().as_slice(),
+            b"secret"
+        );
     }
 
     #[test]
     fn legacy_vault_with_non_nfkc_password_still_opens() {
         let file = seal_legacy(LIGATURE, b"secret");
-        assert_eq!(open(LIGATURE.as_bytes(), &file).unwrap().as_slice(), b"secret");
+        assert_eq!(
+            open(LIGATURE.as_bytes(), &file).unwrap().as_slice(),
+            b"secret"
+        );
         // Il vecchio vault conosce solo i byte originali, non la forma normalizzata.
         assert!(matches!(
             open(b"fine del vault", &file),
@@ -377,9 +416,12 @@ mod tests {
     #[test]
     fn change_master_on_legacy_vault_normalizes_the_new_password() {
         let file = seal_legacy(LIGATURE, b"secret");
-        let changed = change_master(LIGATURE.as_bytes(), DECOMPOSED.as_bytes(), &file, FAST)
-            .unwrap();
-        assert_eq!(open(COMPOSED.as_bytes(), &changed).unwrap().as_slice(), b"secret");
+        let changed =
+            change_master(LIGATURE.as_bytes(), DECOMPOSED.as_bytes(), &file, FAST).unwrap();
+        assert_eq!(
+            open(COMPOSED.as_bytes(), &changed).unwrap().as_slice(),
+            b"secret"
+        );
         assert!(matches!(
             open(LIGATURE.as_bytes(), &changed),
             Err(VaultError::AuthFailed)
@@ -455,7 +497,10 @@ mod tests {
         assert_ne!(&changed[18..34], &file[18..34], "salt");
         assert_ne!(&changed[34..58], &file[34..58], "dek_nonce");
         assert_eq!(open(b"new", &changed).unwrap().as_slice(), b"secret");
-        assert!(matches!(open(b"old", &changed), Err(VaultError::AuthFailed)));
+        assert!(matches!(
+            open(b"old", &changed),
+            Err(VaultError::AuthFailed)
+        ));
     }
 
     #[test]
@@ -473,7 +518,13 @@ mod tests {
     #[test]
     fn hostile_kdf_params_are_auth_failed() {
         let file = seal(b"pw", b"secret", FAST).unwrap();
-        for (offset, value) in [(6, u32::MAX), (10, u32::MAX), (14, u32::MAX), (10, 0), (14, 0)] {
+        for (offset, value) in [
+            (6, u32::MAX),
+            (10, u32::MAX),
+            (14, u32::MAX),
+            (10, 0),
+            (14, 0),
+        ] {
             let mut bad = file.clone();
             bad[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             assert!(
@@ -515,7 +566,10 @@ mod tests {
 
         let resealed = reseal(&key, b"updated").unwrap();
         assert_eq!(open(b"pw", &resealed).unwrap().as_slice(), b"updated");
-        assert!(matches!(open(b"other", &resealed), Err(VaultError::AuthFailed)));
+        assert!(matches!(
+            open(b"other", &resealed),
+            Err(VaultError::AuthFailed)
+        ));
     }
 
     #[test]

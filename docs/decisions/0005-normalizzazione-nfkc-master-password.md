@@ -8,8 +8,12 @@ oppure "e" + accento combinante (U+0065 U+0300); la legatura "ﬁ" contro "fi"; 
 larghezza piena. Sistemi operativi, tastiere e metodi di input diversi producono forme
 diverse. Argon2id lavora sui byte: senza normalizzazione la stessa password digitata su
 un altro sistema non apre il vault. Il problema diventa concreto con il target
-multipiattaforma. NIST SP 800-63B raccomanda di applicare NFKC o NFKD prima dell'hash
-(riferimento da verificare sul testo ufficiale).
+multipiattaforma.
+
+Riferimento normativo (corretto il 2026-11-23 dopo l'audit `docs/audit/2026-11-23-completo.md`,
+rilievo B3): NFKC/NFKD era la raccomandazione di NIST SP 800-63B **rev. 3**. La **rev. 4**
+(luglio 2025, §3.1.1.2) raccomanda (SHOULD) **NFC**. La scelta di NFKC resta valida ed è
+motivata sotto (vedi "NFC" in Alternative considerate).
 
 ## Decisione
 - Nuova dipendenza `unicode-normalization` 0.1.26 (autorizzata esplicitamente), solo in `pwdv-core`.
@@ -32,6 +36,12 @@ multipiattaforma. NIST SP 800-63B raccomanda di applicare NFKC o NFKD prima dell
   NFKC diventerebbe illeggibile senza preavviso.
 - **NFKD**: equivalente per l'uguaglianza; NFKC produce stringhe più corte e coincide con
   quello che la maggior parte delle tastiere genera già.
+- **NFC** (raccomandata da NIST rev. 4): non unisce i caratteri di compatibilità
+  (larghezza piena, legature), quindi la stessa password digitata con un metodo di input
+  diverso potrebbe non aprire il vault. Passarci ora richiederebbe un terzo tentativo
+  di sblocco (NFC → NFKC → byte originali), con un Argon2id in più sulle password errate,
+  in cambio di un beneficio pratico minimo. Si mantiene NFKC: lo scostamento da un SHOULD
+  è deliberato e documentato qui.
 - **Normalizzare in CLI e GUI** invece che nel core: due punti da tenere allineati e
   nessuna garanzia per chi usa il core direttamente.
 

@@ -11,6 +11,12 @@ mod worker;
 use eframe::egui;
 
 fn main() -> eframe::Result {
+    // Prima di aprire la finestra: un crash a vault aperto non deve salvare
+    // DEK e voci su disco. Se non si riesce, meglio non partire.
+    if let Err(e) = pwdv_core::hardening::disable_core_dumps() {
+        eprintln!("pwdv-gui: impossibile disattivare i core dump: {e}");
+        std::process::exit(1);
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("pwdv")

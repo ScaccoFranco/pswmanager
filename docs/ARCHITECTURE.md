@@ -1,6 +1,8 @@
 # Architettura — pwdv
 _Ultimo aggiornamento: 2026-11-23_
 
+Chiavi, algoritmi e procedure di sostituzione: [CRYPTO-INVENTORY.md](CRYPTO-INVENTORY.md).
+
 ## Vista d'insieme
 
 pwdv è un password manager **locale e offline**: due eseguibili (CLI `pwdv` e GUI
@@ -44,6 +46,7 @@ flowchart LR
 | `thiserror` | 1 | Tipo `VaultError` | Errori tipizzati senza segreti | `pwdv-core/src/error.rs` |
 | `unicode-normalization` | 0.1.26 | NFKC della master password prima di Argon2id | NIST SP 800-63B — [ADR 0005](decisions/0005-normalizzazione-nfkc-master-password.md) | `pwdv-core/src/policy.rs`, usata in `crypto.rs` |
 | `clap` | 4 (feat. `derive`) | Parsing comandi CLI | Standard de facto | `pwdv-cli` |
+| `libc` | 0.2 (solo `cfg(unix)`) | `setrlimit` e `prctl` per disattivare i core dump, `mlock` per bloccare in RAM chiavi e password | La libreria standard non le espone — ADR [0008](decisions/0008-disattivazione-core-dump.md), [0009](decisions/0009-blocco-in-ram-dei-segreti.md) | `pwdv-core/src/hardening.rs` |
 | `rpassword` | 7 | Lettura password da terminale senza eco | Password mai come argomenti | `pwdv-cli` |
 | `eframe` / `egui` | 0.36 (`glow`, `wayland`, `x11`, `accesskit`, `default_fonts`; **niente `persistence`**) | GUI immediate-mode | [ADR 0003](decisions/0003-gui-eframe-egui.md) | `pwdv-gui` |
 | `arboard` | 3.6 (feat. `wayland-data-control`) | Clipboard di sistema | Su Hyprland il clipboard XWayland non raggiunge le app Wayland | `pwdv-gui/src/security.rs` |
@@ -52,12 +55,13 @@ flowchart LR
 
 ### pwdv-core (libreria)
 - **Responsabilità**: formato file v1, crittografia (KEK/DEK), modello dati, lettura e scrittura atomica del vault.
-- **Dipende da**: argon2, chacha20poly1305, rand, zeroize, serde/serde_json, thiserror. Nessun crate grafico.
+- **Dipende da**: argon2, chacha20poly1305, rand, zeroize, serde/serde_json, thiserror, libc (solo unix). Nessun crate grafico.
 - **Espone** (moduli pubblici):
   - `format` — `MAGIC`, `VERSION`, `HEADER_LEN = 130`, `KdfParams`, `Header::parse` / `to_bytes`
   - `crypto` — `derive_kek`, `seal`, `seal_with_key`, `reseal`, `open`, `open_with_key`, `change_master`, `VaultKey` (DEK + header[0..106], con `matches()` per rilevare riscritture)
-  - `key` — `Key32` (ZeroizeOnDrop, accesso via `as_bytes()`)
-  - `policy` — `MIN_MASTER_CHARS = 15`, `check_new_master()` → `Weakness` (lunghezza, elenco comune incorporato da `data/common-passwords.txt`, ripetizioni, sequenze, parola "pwdv"); `nfkc()` usata da `crypto`. Applicata da CLI (`init`, `passwd`) e GUI (creazione), mai allo sblocco — ADR [0004](decisions/0004-lunghezza-minima-master-password.md), [0005](decisions/0005-normalizzazione-nfkc-master-password.md), [0006](decisions/0006-elenco-password-comuni.md)
+  - `hardening` — `disable_core_dumps()`: chiamata per prima nel `main` di CLI e GUI (`RLIMIT_CORE = 0`, su Linux anche `PR_SET_DUMPABLE = 0`; nessuna operazione su Windows) — [ADR 0008](decisions/0008-disattivazione-core-dump.md). `lock_bytes` / `lock_string` (`mlock`, mai `munlock`) e `memory_lock_failed()` per avvisare l'utente — [ADR 0009](decisions/0009-blocco-in-ram-dei-segreti.md)
+  - `key` — `Key32` (byte in `Box` bloccato in RAM, azzerato al drop, accesso via `as_bytes()`)
+  - `policy` — `MIN_MASTER_CHARS = 15`, `MAX_MASTER_CHARS = 256`, `too_long()`, `check_new_master()` → `Weakness` (lunghezza minima e massima, elenco comune incorporato da `data/common-passwords.txt`, ripetizioni, sequenze, parola "pwdv"); `nfkc()` usata da `crypto`. Applicata da CLI (`init`, `passwd`) e GUI (creazione), mai allo sblocco — ADR [0004](decisions/0004-lunghezza-minima-master-password.md), [0005](decisions/0005-normalizzazione-nfkc-master-password.md), [0006](decisions/0006-elenco-password-comuni.md)
   - `vault` — `Entry`, `VaultData`, `DATA_VERSION = 1`
   - `store` — `load`, `load_with_key`, `save`, `save_with_key`, `create`, `change_password`, `rekey`
   - `error` — `VaultError` (`BadMagic`, `UnsupportedVersion`, `Truncated`, `AuthFailed`, `Malformed`, `Conflict`, `Kdf`, `Io`)
@@ -154,15 +158,15 @@ Wayland/X11, AT-SPI (accessibilità).
 - **Variabili d'ambiente**: `HOME` (default `~/.vault.pwdv` in CLI e GUI), `PWDV_AUTOLOCK_SECONDS` (GUI, 10–86400).
 - **Build**: `cargo build --release` (in debug Argon2 è molto lento).
 - **Installazione Linux**: `./install.sh` → `~/.local/bin`, voce `.desktop` da `packaging/linux/pwdv.desktop.in`, icona SVG; `PREFIX` configurabile. `./uninstall.sh` per rimuovere.
-- **CI**: nessuna.
+- **CI**: GitHub Actions (`.github/workflows/ci.yml`), solo Linux: `cargo fmt --check`, `cargo clippy --locked … -D warnings`, `cargo test --locked --workspace` a ogni push su `main` e a ogni PR; `cargo audit` (RustSec) anche ogni lunedì.
 
 ## Punti aperti / debito tecnico
 
-- **Multipiattaforma (obiettivo) non ancora coperto**: default del vault basato su `HOME` (assente su Windows); permessi `0600` e sync della directory solo `#[cfg(unix)]`; MIME `x-kde-passwordManagerHint` solo Linux; `install.sh` e packaging solo Linux; nessun test su macOS/Windows.
+- **Multipiattaforma (obiettivo) non ancora coperto**: default del vault basato su `HOME` (assente su Windows); permessi `0600`, sync della directory, disattivazione dei core dump e `mlock` solo `#[cfg(unix)]` (su Windows manca `VirtualLock`); MIME `x-kde-passwordManagerHint` solo Linux; `install.sh` e packaging solo Linux; nessun test su macOS/Windows.
 - Generatore di password solo in CLI; tema chiaro/scuro assente (obiettivi correnti).
 - `CLAUDE.md` parla di stato `Locked`, nel codice lo stato bloccato è `AppState::Unlocking`.
 - Due GUI sullo stesso vault possono sovrascriversi (`Conflict` rileva solo cambi di chiave, non di contenuto).
 - Copie non azzerabili in egui/winit/arboard (documentato nel README §9).
-- Nessuna CI che esegua `cargo test` e `cargo clippy`.
+- La CI gira solo su Linux: nessun test automatico su macOS e Windows.
 - Elenco di password comuni statico (SecLists xato-net, 10.898 voci ≥ 15 caratteri): non si aggiorna da solo e non copre le violazioni recenti (ADR 0006).
 - Doppio percorso di sblocco per i vault creati prima di NFKC (ADR 0005): un vault resta "legacy" finché non si cambia la password.

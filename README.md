@@ -49,6 +49,13 @@ Il progetto offre due programmi che usano lo stesso formato di file:
   mostri) e svuota il clipboard 20 secondi dopo una copia.
 - **Salvataggi interrotti.** Ogni scrittura è atomica: un'interruzione di corrente non
   lascia un file a metà.
+- **Core dump dopo un crash.** All'avvio CLI e GUI disattivano i core dump (su Linux
+  `RLIMIT_CORE = 0` e `PR_SET_DUMPABLE = 0`, su macOS `RLIMIT_CORE = 0`): se il programma
+  va in crash con il vault aperto, chiavi e password non finiscono su disco (per esempio
+  in `systemd-coredump`). Su Linux lo stesso flag impedisce ad altri processi del tuo
+  utente di leggere la memoria di pwdv con `ptrace`, salvo che siano eseguiti come root.
+  Su Windows questa protezione non c'è: i dump di Windows Error Reporting restano
+  possibili.
 
 ### Non protegge da
 
@@ -60,8 +67,25 @@ Il progetto offre due programmi che usano lo stesso formato di file:
 - **Una master password debole o riutilizzata.** La cifratura è forte quanto la
   password che la protegge.
 - **Una master password dimenticata.** Non esiste recupero, per costruzione.
-- **La memoria scritta su disco dal sistema operativo** (swap, ibernazione): pwdv non
-  impedisce che le pagine di memoria del processo finiscano nello swap.
+- **Copie dei segreti fuori dal controllo di pwdv che finiscono nello swap o
+  nell'immagine di ibernazione**: vedi i prerequisiti qui sotto.
+
+### Prerequisiti del sistema
+
+pwdv blocca in RAM (`mlock`) le chiavi e i buffer della master password, così il
+sistema non li scrive nello swap. Non può bloccare tutto: le voci del vault, le copie
+del testo in egui, winit e arboard e la memoria di lavoro di Argon2id (64 MiB) restano
+spostabili, e l'ibernazione salva su disco anche le pagine bloccate. Per questo pwdv
+presuppone (OWASP ASVS 5.0, requisito 11.7.1):
+
+- **swap cifrato o solo in RAM** (per esempio zram, oppure swap dentro un volume LUKS);
+- **ibernazione su disco cifrato, oppure disattivata**;
+- se l'hardware la offre (AMD SME/TSME, Intel TME), la **cifratura della memoria**
+  attiva nel firmware.
+
+Se il sistema non permette il blocco in RAM (limite `ulimit -l` esaurito, oppure
+Windows, dove non è ancora implementato), la GUI mostra un avviso nella schermata di
+sblocco e la CLI lo scrive su stderr. pwdv funziona comunque.
 
 ### Rete
 
@@ -308,7 +332,7 @@ della CLI). Puoi scriverne un altro, poi premi **Apri** o **Invio**.
 
 ### 5.2 Crea un nuovo vault
 
-1. Scegli una **master password** di almeno **15 caratteri** e scrivila nel primo campo.
+1. Scegli una **master password** tra **15 e 256 caratteri** e scrivila nel primo campo.
    Sono rifiutate le password che compaiono in un elenco di password comuni o trafugate,
    i blocchi ripetuti (`trottolatrottola`), le sequenze (`abcdef…`, `1234…`) e quelle che
    contengono la parola "pwdv". Non ci sono regole su maiuscole, cifre o simboli.
@@ -330,6 +354,9 @@ Scrivi la master password e premi **Invio** o **Sblocca**.
 - Dal terzo tentativo sbagliato consecutivo il pulsante resta disattivato per un
   momento: 1 secondo, poi 2, poi 4 secondi a ogni nuovo errore. Il blocco non è mai
   permanente e il conteggio si azzera al primo sblocco riuscito.
+- Una password di più di 256 caratteri (per esempio incollata) viene rifiutata con un
+  messaggio, mai troncata: il limite è lo stesso della CLI. I vault creati con la CLI
+  prima di questo limite con password più lunghe si aprono solo dalla CLI.
 - **Cambia vault** riporta alla scelta del file.
 
 ### 5.4 La schermata principale
@@ -474,7 +501,7 @@ pwdv rm GitHub
 pwdv passwd
 ```
 
-Chiede la password attuale e poi due volte la nuova (stesse regole di `init`: almeno 15
+Chiede la password attuale e poi due volte la nuova (stesse regole di `init`: da 15 a 256
 caratteri, non comune, non ripetuta o in sequenza, senza "pwdv"). Viene ricifrata solo la DEK, e il
 file `.bak` viene eliminato perché si aprirebbe ancora con la vecchia password.
 
@@ -630,6 +657,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 I test comprendono il vettore Argon2id di RFC 9106, prove di manomissione su ogni campo
 dell'header (`crates/pwdv-core/tests/tamper.rs`), la scrittura atomica, il timer di
 blocco e la logica del clipboard (con un clipboard finto, per non toccare quello reale).
+
+La CI su GitHub (`.github/workflows/ci.yml`) esegue gli stessi controlli, più
+`cargo fmt --check`, a ogni push e pull request, e `cargo audit` ogni settimana per le
+vulnerabilità note nelle dipendenze. Chiavi, algoritmi e procedure di sostituzione sono
+elencati in [docs/CRYPTO-INVENTORY.md](docs/CRYPTO-INVENTORY.md).
 
 ### Regole del codice
 

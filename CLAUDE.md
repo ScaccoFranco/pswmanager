@@ -23,11 +23,12 @@ Nessuna sincronizzazione, nessun server, nessuna rete. Per uso personale.
 ## Struttura
 
 ```
-crates/pwdv-core/   libreria: format, crypto, key, policy, vault, store, error (+ tests/tamper.rs, data/ = elenco password comuni)
+crates/pwdv-core/   libreria: format, crypto, hardening, key, policy, vault, store, error (+ tests/tamper.rs, data/ = elenco password comuni)
 crates/pwdv-cli/    binario `pwdv`: init, add, get, list, rm, passwd, rekey, gen
 crates/pwdv-gui/    binario `pwdv-gui`: app, unlock, worker, main_view, security, window, theme
 packaging/linux/    .desktop e icona per install.sh
-docs/               ARCHITECTURE.md, decisions/ (ADR)
+docs/               ARCHITECTURE.md, CRYPTO-INVENTORY.md, decisions/ (ADR), audit/
+.github/workflows/  CI (fmt, clippy, test, cargo audit)
 prompts/            prompt di lavoro (ignorato da git)
 ```
 
@@ -37,6 +38,7 @@ prompts/            prompt di lavoro (ignorato da git)
 - `argon2` 0.5 (feature `zeroize`), `chacha20poly1305` 0.10, `zeroize` 1 (feature `zeroize_derive`), `rand` 0.8, `thiserror` 1
 - Vault store e CLI: `serde` 1 (feature `derive`), `serde_json` 1, `clap` 4 (feature `derive`), `rpassword` 7
 - Password: `unicode-normalization` 0.1.26 (NFKC, solo in `pwdv-core`)
+- Processo: `libc` 0.2 (solo `cfg(unix)`, in `pwdv-core::hardening`: core dump disattivati e `mlock` dei segreti, ADR 0008 e 0009)
 - GUI: `eframe` 0.36 (senza `persistence`), `arboard` 3.6 (feature `wayland-data-control`)
 - Nessuna dipendenza aggiuntiva senza richiesta esplicita
 
@@ -65,7 +67,7 @@ I parametri KDF e il salt sono esclusi dall'AAD del vault per consentire il camb
 ## Vincoli di codice
 
 - Zero `unwrap()`, `expect()`, `panic!()`, indexing con slicing non controllato nel codice di libreria. Ammessi solo nei test.
-- Tipi chiave: `#[derive(ZeroizeOnDrop)]`, nessun `Debug`, `Display`, `Clone`, `Serialize`. Accesso ai byte solo via metodo esplicito.
+- Tipi chiave: azzerati al drop (`#[derive(ZeroizeOnDrop)]`, o `Drop` manuale + marker `ZeroizeOnDrop` se il campo non implementa `Zeroize`, come `Key32`), nessun `Debug`, `Display`, `Clone`, `Serialize`. Accesso ai byte solo via metodo esplicito.
 - Plaintext restituito sempre come `Zeroizing<Vec<u8>>`.
 - Nessun `unsafe` senza commento che ne giustifichi la necessità.
 - Nessun segreto in log, messaggi di errore o `Debug`. Gli errori di autenticazione non distinguono "password sbagliata" da "file manomesso".
@@ -108,4 +110,5 @@ I vettori noti per Argon2id vanno copiati da RFC 9106. **Non inventare valori at
 
 - Architettura: @docs/ARCHITECTURE.md
 - Decisioni: docs/decisions/
+- Inventario crittografico (chiavi, algoritmi, migrazione): docs/CRYPTO-INVENTORY.md — da aggiornare a ogni modifica di crypto, format o key
 - Guida utente e modello di minaccia: README.md

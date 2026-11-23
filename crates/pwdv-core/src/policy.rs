@@ -31,6 +31,8 @@ pub(crate) fn nfkc(password: &[u8]) -> Option<Zeroizing<String>> {
     let mut out = Zeroizing::new(String::new());
     out.try_reserve_exact(text.len().checked_mul(MAX_NFKC_EXPANSION)?)
         .ok()?;
+    // Bloccata in RAM prima di scriverci la password (ADR 0009).
+    crate::hardening::lock_string(&out);
     for c in text.nfkc() {
         // Irraggiungibile se MAX_NFKC_EXPANSION è corretto. Se non lo fosse,
         // meglio i byte originali (scelta comunque deterministica) che una
@@ -48,6 +50,13 @@ pub(crate) fn nfkc(password: &[u8]) -> Option<Zeroizing<String>> {
 /// fattore di autenticazione, come la master password del vault.
 pub const MIN_MASTER_CHARS: usize = 15;
 
+/// Lunghezza massima di una nuova master password, in caratteri Unicode. SP
+/// 800-63B chiede di accettarne almeno 64. Il limite è unico per CLI e GUI:
+/// un vault creato da un'interfaccia deve aprirsi dall'altra. La GUI rifiuta
+/// le password più lunghe invece di troncarle (la verifica deve riguardare
+/// l'intera password digitata).
+pub const MAX_MASTER_CHARS: usize = 256;
+
 /// Password comuni di almeno 15 caratteri, minuscole, una per riga: da SecLists,
 /// `xato-net-10-million-passwords-1000000.txt` (licenza MIT, vedi
 /// `data/LICENSE-SecLists`). Le più corte sono già escluse dalla lunghezza minima.
@@ -62,6 +71,8 @@ const CONTEXT_WORDS: [&[u8]; 1] = [b"pwdv"];
 pub enum Weakness {
     /// Meno di [`MIN_MASTER_CHARS`] caratteri.
     TooShort,
+    /// Più di [`MAX_MASTER_CHARS`] caratteri.
+    TooLong,
     /// Nell'elenco di password comuni o compromesse (senza distinzione tra
     /// maiuscole e minuscole).
     Common,
@@ -84,6 +95,9 @@ pub fn check_new_master(password: &str) -> Result<(), Weakness> {
     if !long_enough(password) {
         return Err(Weakness::TooShort);
     }
+    if too_long(password) {
+        return Err(Weakness::TooLong);
+    }
     let normalized = nfkc(password.as_bytes());
     let text = normalized.as_ref().map_or(password, |n| n.as_str());
     if is_common(text) {
@@ -105,11 +119,18 @@ fn long_enough(password: &str) -> bool {
     password.chars().nth(MIN_MASTER_CHARS - 1).is_some()
 }
 
+/// Vero se `password` supera [`MAX_MASTER_CHARS`] caratteri Unicode. Usata
+/// anche dalla GUI allo sblocco, per avvisare invece di troncare.
+pub fn too_long(password: &str) -> bool {
+    password.chars().nth(MAX_MASTER_CHARS).is_some()
+}
+
 /// Confronto carattere per carattere, senza creare copie minuscole della password.
 fn is_common(password: &str) -> bool {
-    COMMON_PASSWORDS
-        .lines()
-        .any(|line| line.chars().eq(password.chars().flat_map(char::to_lowercase)))
+    COMMON_PASSWORDS.lines().any(|line| {
+        line.chars()
+            .eq(password.chars().flat_map(char::to_lowercase))
+    })
 }
 
 /// Vero se la password è un blocco più corto ripetuto per intero almeno due volte.
@@ -165,6 +186,19 @@ mod tests {
     }
 
     #[test]
+    fn rejects_more_than_max_chars_counting_unicode() {
+        assert!(!too_long(&"a".repeat(MAX_MASTER_CHARS)));
+        assert!(too_long(&"a".repeat(MAX_MASTER_CHARS + 1)));
+        // 'è' occupa 2 byte ma conta come un carattere.
+        assert!(!too_long(&"è".repeat(MAX_MASTER_CHARS)));
+        assert!(too_long(&"è".repeat(MAX_MASTER_CHARS + 1)));
+        assert_eq!(
+            check_new_master(&"a".repeat(MAX_MASTER_CHARS + 1)),
+            Err(Weakness::TooLong)
+        );
+    }
+
+    #[test]
     fn counts_unicode_chars_not_bytes() {
         // 14 caratteri da 2 byte: 28 byte, ma ancora troppo corta.
         assert!(!long_enough(&"è".repeat(MIN_MASTER_CHARS - 1)));
@@ -185,9 +219,9 @@ mod tests {
         let lines: Vec<&str> = COMMON_PASSWORDS.lines().collect();
         assert!(lines.len() > 10_000);
         assert!(lines.iter().all(|l| long_enough(l)));
-        assert!(lines
-            .iter()
-            .all(|l| l.bytes().all(|b| (0x20..0x7f).contains(&b) && !b.is_ascii_uppercase())));
+        assert!(lines.iter().all(|l| l
+            .bytes()
+            .all(|b| (0x20..0x7f).contains(&b) && !b.is_ascii_uppercase())));
     }
 
     #[test]
@@ -205,8 +239,14 @@ mod tests {
     #[test]
     fn rejects_repetitions() {
         assert_eq!(check_new_master(&"x".repeat(20)), Err(Weakness::Repetitive));
-        assert_eq!(check_new_master(&"xyz".repeat(6)), Err(Weakness::Repetitive));
-        assert_eq!(check_new_master("trottolatrottola"), Err(Weakness::Repetitive));
+        assert_eq!(
+            check_new_master(&"xyz".repeat(6)),
+            Err(Weakness::Repetitive)
+        );
+        assert_eq!(
+            check_new_master("trottolatrottola"),
+            Err(Weakness::Repetitive)
+        );
         // Una ripetizione parziale non basta.
         assert_eq!(check_new_master("trottolatrottolaX"), Ok(()));
     }
@@ -214,10 +254,22 @@ mod tests {
     #[test]
     fn rejects_sequences() {
         // "abcdefghijklmnop" è già nell'elenco comune: si parte da "b".
-        assert_eq!(check_new_master("bcdefghijklmnopq"), Err(Weakness::Sequential));
-        assert_eq!(check_new_master("ponmlkjihgfedcba"), Err(Weakness::Sequential));
-        assert_eq!(check_new_master("4567890123456789"), Err(Weakness::Sequential));
-        assert_eq!(check_new_master("9876543210987654"), Err(Weakness::Sequential));
+        assert_eq!(
+            check_new_master("bcdefghijklmnopq"),
+            Err(Weakness::Sequential)
+        );
+        assert_eq!(
+            check_new_master("ponmlkjihgfedcba"),
+            Err(Weakness::Sequential)
+        );
+        assert_eq!(
+            check_new_master("4567890123456789"),
+            Err(Weakness::Sequential)
+        );
+        assert_eq!(
+            check_new_master("9876543210987654"),
+            Err(Weakness::Sequential)
+        );
         // Verso che cambia: non è una sequenza.
         assert_eq!(check_new_master("abcdefgfedcbabcd"), Ok(()));
     }

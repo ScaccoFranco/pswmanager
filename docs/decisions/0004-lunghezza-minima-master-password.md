@@ -16,6 +16,11 @@ offline senza limiti di tentativi: la lunghezza è la difesa principale insieme 
   - CLI: `pwdv init` e `pwdv passwd` (`prompt_new`);
   - GUI: schermata di creazione del vault, prima del controllo di conferma.
 - **Mai allo sblocco**: i vault creati con password più corte restano apribili.
+- Aggiunta del 2026-11-23 (audit, rilievo B1): `policy::MAX_MASTER_CHARS = 256`, uguale per
+  CLI e GUI (`Weakness::TooLong`), così un vault creato da un'interfaccia si apre anche
+  dall'altra. La GUI rifiuta con un messaggio una password oltre il limite, anche allo
+  sblocco, invece di troncarla. La CLI non impone il limite allo sblocco: i vault creati
+  prima con password più lunghe restano apribili da lì.
 - Nessuna regola di composizione. Il core non la impone in `store::create` /
   `store::change_password`, che continuano ad accettare byte arbitrari.
 
