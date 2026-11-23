@@ -29,6 +29,16 @@ fn main() -> eframe::Result {
             .with_decorations(false),
         // Già escluso dalla feature `persistence` disabilitata; esplicito per sicurezza.
         persist_window: false,
+        // Senza vsync: su Wayland, con la finestra su un altro workspace il
+        // compositor non manda più frame callback ed `eglSwapBuffers` con
+        // intervallo 1 resta bloccato. Il thread della UI si ferma, non
+        // risponde ai ping (Hyprland: "non risponde") e non aggiorna più il
+        // cursore. I repaint dell'app sono solo su eventi e timer, quindi
+        // senza vsync non c'è un ciclo di rendering continuo.
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(
