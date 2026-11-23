@@ -47,6 +47,12 @@ enum Command {
     Rm { name: String },
     /// Change the master password (re-wraps the key, vault data untouched)
     Passwd,
+    /// Replace the data key and re-encrypt the whole vault
+    ///
+    /// Run it after `passwd` if an old master password may be known: old
+    /// copies of the file, together with that password, then no longer unlock
+    /// the current vault.
+    Rekey,
     /// Generate a random password
     Gen {
         #[arg(short, long, default_value_t = 20, value_parser = clap::value_parser!(u16).range(1..))]
@@ -111,6 +117,7 @@ fn run(cli: Cli) -> CliResult {
         Command::List => list(&vault_path(vault)?),
         Command::Rm { name } => rm(&vault_path(vault)?, &name),
         Command::Passwd => passwd(&vault_path(vault)?),
+        Command::Rekey => rekey(&vault_path(vault)?),
     }
 }
 
@@ -205,6 +212,15 @@ fn passwd(path: &Path) -> CliResult {
     Ok(())
 }
 
+fn rekey(path: &Path) -> CliResult {
+    // Niente `unlock`: `store::rekey` apre già il vault, una derivazione in meno.
+    require_vault(path)?;
+    let master = prompt("Master password: ")?;
+    store::rekey(path, master.as_bytes())?;
+    println!("vault re-encrypted with a new data key");
+    Ok(())
+}
+
 fn vault_path(arg: Option<PathBuf>) -> CliResult<PathBuf> {
     match arg {
         Some(path) => Ok(path),
@@ -216,12 +232,17 @@ fn vault_path(arg: Option<PathBuf>) -> CliResult<PathBuf> {
 
 /// Chiede la master password e apre il vault.
 fn unlock(path: &Path) -> CliResult<(Zeroizing<String>, VaultData)> {
-    if !path.try_exists()? {
-        return Err(format!("no vault at {}; run `pwdv init` first", path.display()).into());
-    }
+    require_vault(path)?;
     let master = prompt("Master password: ")?;
     let data = store::load(path, master.as_bytes())?;
     Ok((master, data))
+}
+
+fn require_vault(path: &Path) -> CliResult {
+    if !path.try_exists()? {
+        return Err(format!("no vault at {}; run `pwdv init` first", path.display()).into());
+    }
+    Ok(())
 }
 
 fn prompt(label: &str) -> CliResult<Zeroizing<String>> {
@@ -230,18 +251,29 @@ fn prompt(label: &str) -> CliResult<Zeroizing<String>> {
 
 fn prompt_new(label: &str) -> CliResult<Zeroizing<String>> {
     let first = prompt(label)?;
-    if !policy::master_long_enough(&first) {
-        return Err(format!(
-            "master password must be at least {} characters",
-            policy::MIN_MASTER_CHARS
-        )
-        .into());
+    if let Err(weakness) = policy::check_new_master(&first) {
+        return Err(weakness_message(weakness).into());
     }
     let confirm = prompt("Confirm: ")?;
     if *first != *confirm {
         return Err("passwords do not match".into());
     }
     Ok(first)
+}
+
+/// Messaggio per una master password rifiutata. Non cita mai la password.
+fn weakness_message(weakness: policy::Weakness) -> String {
+    use policy::Weakness::*;
+    match weakness {
+        TooShort => format!(
+            "master password must be at least {} characters",
+            policy::MIN_MASTER_CHARS
+        ),
+        Common => "this password is in a list of common or leaked passwords".into(),
+        Repetitive => "the master password must not be a repeated pattern".into(),
+        Sequential => "the master password must not be a sequence like abcd or 1234".into(),
+        ContextWord => "the master password must not contain the word 'pwdv'".into(),
+    }
 }
 
 /// Estrazione uniforme da OsRng sull'unione delle classi scelte.
@@ -267,6 +299,14 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn rekey_takes_no_arguments_but_the_global_vault() {
+        let cli = Cli::try_parse_from(["pwdv", "rekey", "--vault", "/tmp/x.pwdv"]).unwrap();
+        assert!(matches!(cli.command, Command::Rekey));
+        assert_eq!(cli.vault.as_deref(), Some(Path::new("/tmp/x.pwdv")));
+        assert!(Cli::try_parse_from(["pwdv", "rekey", "extra"]).is_err());
     }
 
     #[test]

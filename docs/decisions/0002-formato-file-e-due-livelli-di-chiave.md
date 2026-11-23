@@ -27,7 +27,7 @@ password deve essere economico e sicuro anche se interrotto.
 
 ## Conseguenze
 - Il cambio password è veloce e il vault non viene riscritto.
-- La DEK non cambia mai: chi ha una vecchia copia del file e la vecchia password può
-  ricavare la DEK e decifrare anche il vault attuale (documentato nel README §8). Per
-  revocare serve un nuovo vault.
+- Il cambio password non cambia la DEK: chi ha una vecchia copia del file e la vecchia
+  password può ricavarla e decifrare anche il vault attuale (README §8). La DEK cambia
+  con `pwdv rekey` (ADR 0007) e, come effetto collaterale, a ogni salvataggio della CLI.
 - Questi invarianti sono vincolanti: vedi `CLAUDE.md`, sezione invarianti crittografici.

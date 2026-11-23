@@ -23,8 +23,8 @@ Nessuna sincronizzazione, nessun server, nessuna rete. Per uso personale.
 ## Struttura
 
 ```
-crates/pwdv-core/   libreria: format, crypto, key, policy, vault, store, error (+ tests/tamper.rs)
-crates/pwdv-cli/    binario `pwdv`: init, add, get, list, rm, passwd, gen
+crates/pwdv-core/   libreria: format, crypto, key, policy, vault, store, error (+ tests/tamper.rs, data/ = elenco password comuni)
+crates/pwdv-cli/    binario `pwdv`: init, add, get, list, rm, passwd, rekey, gen
 crates/pwdv-gui/    binario `pwdv-gui`: app, unlock, worker, main_view, security, window, theme
 packaging/linux/    .desktop e icona per install.sh
 docs/               ARCHITECTURE.md, decisions/ (ADR)
@@ -36,6 +36,7 @@ prompts/            prompt di lavoro (ignorato da git)
 - Rust 2021, `cargo` workspace singolo
 - `argon2` 0.5 (feature `zeroize`), `chacha20poly1305` 0.10, `zeroize` 1 (feature `zeroize_derive`), `rand` 0.8, `thiserror` 1
 - Vault store e CLI: `serde` 1 (feature `derive`), `serde_json` 1, `clap` 4 (feature `derive`), `rpassword` 7
+- Password: `unicode-normalization` 0.1.26 (NFKC, solo in `pwdv-core`)
 - GUI: `eframe` 0.36 (senza `persistence`), `arboard` 3.6 (feature `wayland-data-control`)
 - Nessuna dipendenza aggiuntiva senza richiesta esplicita
 
@@ -58,6 +59,8 @@ offset chiave: salt 18, dek_nonce 34, wrapped_dek 58, vault_nonce 106, ciphertex
 - seal/open vault: `header[0..6] ++ header[106..130]` (30 byte: magic, version, kdf_id, vault_nonce)
 
 I parametri KDF e il salt sono esclusi dall'AAD del vault per consentire il cambio password senza ricifrare i dati. Sono già autenticati dallo unwrap della DEK.
+
+**Password → Argon2id:** la password passa per NFKC (`policy::nfkc`) in `wrap_dek` e `unwrap_dek`, mai in `derive_kek`. Allo sblocco, se la forma NFKC è diversa e non apre, si riprova con i byte originali (vault pre-NFKC). Non rimuovere il fallback: renderebbe illeggibili quei vault. Vedi ADR 0005.
 
 ## Vincoli di codice
 

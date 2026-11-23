@@ -16,6 +16,7 @@ use crate::format::{
     OFF_VAULT_NONCE, VERSION, WRAPPED_DEK_LEN,
 };
 use crate::key::Key32;
+use crate::policy;
 
 const ARGON2_ALGORITHM: Algorithm = Algorithm::Argon2id;
 const ARGON2_VERSION: Version = Version::V0x13;
@@ -186,8 +187,20 @@ pub fn change_master(
     Ok(out)
 }
 
-/// Header nuovo con salt e dek_nonce freschi e la DEK cifrata dalla KEK di `password`.
+/// Header nuovo con salt e dek_nonce freschi e la DEK cifrata dalla KEK di
+/// `password`. Una password nuova si deriva sempre nella forma NFKC.
 fn wrap_dek(
+    password: &[u8],
+    dek: &Key32,
+    params: KdfParams,
+    vault_nonce: [u8; NONCE_LEN],
+) -> Result<[u8; HEADER_LEN], VaultError> {
+    let normalized = policy::nfkc(password);
+    let password = normalized.as_ref().map_or(password, |n| n.as_bytes());
+    wrap_dek_raw(password, dek, params, vault_nonce)
+}
+
+fn wrap_dek_raw(
     password: &[u8],
     dek: &Key32,
     params: KdfParams,
@@ -210,8 +223,24 @@ fn wrap_dek(
     Ok(header.to_bytes())
 }
 
-/// Deriva la KEK dai parametri del file e decifra la DEK.
+/// Deriva la KEK dai parametri del file e decifra la DEK. Prova prima la forma
+/// NFKC della password; se è diversa da quella digitata e non apre, riprova
+/// con i byte originali: i vault creati prima della normalizzazione restano
+/// apribili. Il secondo tentativo costa un'altra derivazione Argon2id, solo per
+/// password che contengono caratteri non già in NFKC.
 fn unwrap_dek(
+    password: &[u8],
+    header: &Header,
+    header_bytes: &[u8; HEADER_LEN],
+) -> Result<Key32, VaultError> {
+    match policy::nfkc(password) {
+        Some(normalized) => unwrap_dek_raw(normalized.as_bytes(), header, header_bytes)
+            .or_else(|_| unwrap_dek_raw(password, header, header_bytes)),
+        None => unwrap_dek_raw(password, header, header_bytes),
+    }
+}
+
+fn unwrap_dek_raw(
     password: &[u8],
     header: &Header,
     header_bytes: &[u8; HEADER_LEN],
@@ -304,6 +333,68 @@ mod tests {
         t_cost: 1,
         p_cost: 1,
     };
+
+    /// Vault come lo scriveva pwdv prima della normalizzazione: KEK derivata
+    /// dai byte della password così come sono.
+    fn seal_legacy(password: &str, plaintext: &[u8]) -> Vec<u8> {
+        let dek = Key32::random().unwrap();
+        let vault_nonce = random_array().unwrap();
+        let header = wrap_dek_raw(password.as_bytes(), &dek, FAST, vault_nonce).unwrap();
+        assemble(&header, &dek, &vault_nonce, plaintext).unwrap()
+    }
+
+    /// "è" scritta in due modi: precomposta (NFC, già NFKC) e con accento combinante.
+    const COMPOSED: &str = "caff\u{e8} lungo e amaro";
+    const DECOMPOSED: &str = "caffe\u{300} lungo e amaro";
+    /// Legatura "ﬁ": NFKC la trasforma in "fi".
+    const LIGATURE: &str = "\u{fb01}ne del vault";
+
+    #[test]
+    fn equivalent_spellings_open_the_same_vault() {
+        let file = seal(DECOMPOSED.as_bytes(), b"secret", FAST).unwrap();
+        assert_eq!(open(COMPOSED.as_bytes(), &file).unwrap().as_slice(), b"secret");
+        assert_eq!(open(DECOMPOSED.as_bytes(), &file).unwrap().as_slice(), b"secret");
+
+        let file = seal(LIGATURE.as_bytes(), b"secret", FAST).unwrap();
+        assert_eq!(open(b"fine del vault", &file).unwrap().as_slice(), b"secret");
+    }
+
+    #[test]
+    fn legacy_vault_with_non_nfkc_password_still_opens() {
+        let file = seal_legacy(LIGATURE, b"secret");
+        assert_eq!(open(LIGATURE.as_bytes(), &file).unwrap().as_slice(), b"secret");
+        // Il vecchio vault conosce solo i byte originali, non la forma normalizzata.
+        assert!(matches!(
+            open(b"fine del vault", &file),
+            Err(VaultError::AuthFailed)
+        ));
+        assert!(matches!(
+            open("\u{fb01}ne sbagliata".as_bytes(), &file),
+            Err(VaultError::AuthFailed)
+        ));
+    }
+
+    #[test]
+    fn change_master_on_legacy_vault_normalizes_the_new_password() {
+        let file = seal_legacy(LIGATURE, b"secret");
+        let changed = change_master(LIGATURE.as_bytes(), DECOMPOSED.as_bytes(), &file, FAST)
+            .unwrap();
+        assert_eq!(open(COMPOSED.as_bytes(), &changed).unwrap().as_slice(), b"secret");
+        assert!(matches!(
+            open(LIGATURE.as_bytes(), &changed),
+            Err(VaultError::AuthFailed)
+        ));
+    }
+
+    #[test]
+    fn derive_kek_itself_does_not_normalize() {
+        // La normalizzazione sta sopra derive_kek: il vettore RFC 9106 resta valido
+        // e forme diverse danno KEK diverse a questo livello.
+        let salt = [7u8; 16];
+        let a = derive_kek(COMPOSED.as_bytes(), &salt, &FAST).unwrap();
+        let b = derive_kek(DECOMPOSED.as_bytes(), &salt, &FAST).unwrap();
+        assert_ne!(a.as_bytes(), b.as_bytes());
+    }
 
     #[test]
     fn aad_ranges_match_spec() {

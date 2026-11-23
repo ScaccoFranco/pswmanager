@@ -68,6 +68,27 @@ pub fn change_password(path: &Path, old: &[u8], new: &[u8]) -> Result<(), VaultE
     change_password_with_params(path, old, new, KdfParams::default())
 }
 
+/// Sostituisce la DEK: nuova DEK casuale, nuovo salt, nuovi nonce, vault
+/// ricifrato da capo con la stessa master password e i parametri KDF
+/// predefiniti. Il contenuto viene ricifrato byte per byte, senza essere
+/// interpretato. Serve quando una vecchia master password può essere nota: chi
+/// ha una copia vecchia del file e quella password ricava la DEK di allora, che
+/// dopo `rekey` non apre più il vault. Il `.bak` conserva il file precedente,
+/// che si apre con la password attuale come quello nuovo.
+///
+/// Un vault aperto altrove con la vecchia chiave riceve `Conflict` al
+/// salvataggio successivo, come dopo un cambio password.
+pub fn rekey(path: &Path, password: &[u8]) -> Result<(), VaultError> {
+    rekey_with_params(path, password, KdfParams::default())
+}
+
+fn rekey_with_params(path: &Path, password: &[u8], params: KdfParams) -> Result<(), VaultError> {
+    let current = fs::read(path)?;
+    let plaintext = crypto::open(password, &current)?;
+    let file = crypto::seal(password, &plaintext, params)?;
+    replace(path, &file)
+}
+
 fn save_with_params(
     path: &Path,
     password: &[u8],
@@ -402,6 +423,89 @@ mod tests {
         assert!(matches!(load(&vault, b"old"), Err(VaultError::AuthFailed)));
         // Il .bak si aprirebbe con la vecchia password: non deve sopravvivere.
         assert_eq!(dir.listing(), ["vault.pwdv"]);
+    }
+
+    /// Il file `rest` con l'header di `old` fino a wrapped_dek compreso: chi ha
+    /// una copia vecchia e la sua password prova a usarne la DEK sul vault attuale.
+    fn with_old_wrapped_dek(old: &[u8], rest: &[u8]) -> Vec<u8> {
+        let mut hybrid = old[..106].to_vec();
+        hybrid.extend_from_slice(&rest[106..]);
+        hybrid
+    }
+
+    #[test]
+    fn rekey_makes_an_old_copy_and_old_password_useless() {
+        let dir = TempDir::new("rekey-threat");
+        let vault = dir.vault();
+        save_with_params(&vault, b"old", &data(&["secret"]), FAST).unwrap();
+        let old_copy = fs::read(&vault).unwrap();
+
+        // Cambio password: la DEK resta la stessa, e la copia vecchia con la
+        // password vecchia apre ancora il vault attuale. È il motivo di `rekey`.
+        change_password_with_params(&vault, b"old", b"new", FAST).unwrap();
+        let after_passwd = fs::read(&vault).unwrap();
+        let hybrid = with_old_wrapped_dek(&old_copy, &after_passwd);
+        assert!(crypto::open(b"old", &hybrid).is_ok());
+
+        rekey_with_params(&vault, b"new", FAST).unwrap();
+        let after_rekey = fs::read(&vault).unwrap();
+        let hybrid = with_old_wrapped_dek(&old_copy, &after_rekey);
+        assert!(matches!(
+            crypto::open(b"old", &hybrid),
+            Err(VaultError::AuthFailed)
+        ));
+        assert_eq!(passwords(&load(&vault, b"new").unwrap()), ["secret"]);
+    }
+
+    #[test]
+    fn rekey_replaces_every_random_field_and_keeps_the_content() {
+        let dir = TempDir::new("rekey");
+        let vault = dir.vault();
+        save_with_params(&vault, b"pw", &data(&["a", "b"]), FAST).unwrap();
+        let before = fs::read(&vault).unwrap();
+
+        rekey_with_params(&vault, b"pw", FAST).unwrap();
+        let after = fs::read(&vault).unwrap();
+
+        assert_ne!(&after[18..34], &before[18..34], "salt");
+        assert_ne!(&after[34..58], &before[34..58], "dek_nonce");
+        assert_ne!(&after[58..106], &before[58..106], "wrapped_dek");
+        assert_ne!(&after[106..130], &before[106..130], "vault_nonce");
+        assert_ne!(&after[130..], &before[130..], "ciphertext");
+        // Stesso contenuto, byte per byte.
+        assert_eq!(
+            crypto::open(b"pw", &after).unwrap().as_slice(),
+            crypto::open(b"pw", &before).unwrap().as_slice()
+        );
+        // Il .bak è il file precedente e si apre con la stessa password.
+        assert_eq!(fs::read(backup_path(&vault)).unwrap(), before);
+        assert_eq!(dir.listing(), ["vault.pwdv", "vault.pwdv.bak"]);
+    }
+
+    #[test]
+    fn rekey_with_wrong_password_leaves_files_untouched() {
+        let dir = TempDir::new("rekey-wrong");
+        let vault = dir.vault();
+        save_with_params(&vault, b"pw", &data(&["a"]), FAST).unwrap();
+        let before = fs::read(&vault).unwrap();
+
+        let result = rekey_with_params(&vault, b"nope", FAST);
+        assert!(matches!(result, Err(VaultError::AuthFailed)));
+        assert_eq!(fs::read(&vault).unwrap(), before);
+        assert_eq!(dir.listing(), ["vault.pwdv"]);
+    }
+
+    #[test]
+    fn rekey_invalidates_an_open_session() {
+        let dir = TempDir::new("rekey-session");
+        let vault = dir.vault();
+        let key = create_with_params(&vault, b"pw", &data(&["a"]), FAST).unwrap();
+
+        rekey_with_params(&vault, b"pw", FAST).unwrap();
+        // La GUI con la vecchia DEK non deve sovrascrivere il vault ricifrato.
+        let result = save_with_key(&vault, &key, &data(&["b"]));
+        assert!(matches!(result, Err(VaultError::Conflict)));
+        assert_eq!(passwords(&load(&vault, b"pw").unwrap()), ["a"]);
     }
 
     #[test]

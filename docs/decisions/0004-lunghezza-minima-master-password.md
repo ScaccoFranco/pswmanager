@@ -1,6 +1,6 @@
 # 0004 — Lunghezza minima della master password
 - **Data**: 2026-11-23
-- **Stato**: accettata
+- **Stato**: accettata, estesa da 0006 (`master_long_enough` è diventata `check_new_master`)
 
 ## Contesto
 Fino a questa decisione bastava una master password non vuota. NIST SP 800-63B rev. 4

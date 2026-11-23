@@ -297,11 +297,22 @@ pub fn create_screen(
 /// Perché la nuova master password non è accettabile, se non lo è. Il
 /// messaggio non contiene la password né la sua lunghezza.
 fn new_master_problem(password: &str, confirm: &str) -> Option<String> {
-    if !policy::master_long_enough(password) {
-        Some(format!(
-            "La master password deve avere almeno {} caratteri.",
-            policy::MIN_MASTER_CHARS
-        ))
+    use policy::Weakness::*;
+    if let Err(weakness) = policy::check_new_master(password) {
+        Some(match weakness {
+            TooShort => format!(
+                "La master password deve avere almeno {} caratteri.",
+                policy::MIN_MASTER_CHARS
+            ),
+            Common => "Questa password compare in un elenco di password comuni o \
+                       trafugate: scegline un'altra."
+                .to_owned(),
+            Repetitive => "La master password non può essere un blocco ripetuto.".to_owned(),
+            Sequential => {
+                "La master password non può essere una sequenza come abcd o 1234.".to_owned()
+            }
+            ContextWord => "La master password non può contenere la parola \"pwdv\".".to_owned(),
+        })
     } else if password != confirm {
         Some("Le password non coincidono.".to_owned())
     } else {
@@ -438,20 +449,28 @@ mod tests {
     }
 
     #[test]
-    fn new_master_must_be_long_enough_then_match() {
+    fn new_master_must_pass_policy_then_match() {
         let short = "a".repeat(policy::MIN_MASTER_CHARS - 1);
-        let ok = "a".repeat(policy::MIN_MASTER_CHARS);
+        let ok = "vela rossa sul lago di sera";
 
         let too_short = new_master_problem(&short, &short).unwrap();
         assert!(too_short.contains("almeno"));
-        // La lunghezza si controlla per prima: niente indizi sulla conferma.
+        // La password si controlla per prima: niente indizi sulla conferma.
         assert_eq!(new_master_problem(&short, "x"), Some(too_short));
 
+        let common = new_master_problem("1qaz2wsx3edc4rfv", "1qaz2wsx3edc4rfv").unwrap();
+        assert!(common.contains("comuni"));
+        assert!(!common.contains("1qaz"), "il messaggio non cita la password");
+        let repeated = "x".repeat(20);
+        assert!(new_master_problem(&repeated, &repeated)
+            .unwrap()
+            .contains("ripetuto"));
+
         assert_eq!(
-            new_master_problem(&ok, "x").as_deref(),
+            new_master_problem(ok, "x").as_deref(),
             Some("Le password non coincidono.")
         );
-        assert_eq!(new_master_problem(&ok, &ok), None);
+        assert_eq!(new_master_problem(ok, ok), None);
     }
 
     #[test]

@@ -113,6 +113,7 @@ Scelte di progetto:
 |---|---|---|
 | [`serde`](https://crates.io/crates/serde) + [`serde_json`](https://crates.io/crates/serde_json) | 1 | Il contenuto del vault è un documento JSON, cifrato prima di essere scritto |
 | [`thiserror`](https://crates.io/crates/thiserror) | 1 | Tipi di errore; i messaggi non contengono mai segreti |
+| [`unicode-normalization`](https://crates.io/crates/unicode-normalization) | 0.1 | Normalizzazione Unicode (NFKC) della master password prima di Argon2id |
 
 ### Riga di comando (pwdv-cli)
 
@@ -160,6 +161,10 @@ master password ──Argon2id(salt, parametri)──▶ KEK (32 byte)
   versione cifrata con la KEK.
 - **Cambiare la master password** significa solo ricifrare la DEK con una nuova KEK: i
   dati del vault non vengono riscritti.
+- Prima di Argon2id la master password viene normalizzata in **NFKC** (come raccomanda
+  NIST SP 800-63B): "è" digitata come carattere unico o come "e" + accento apre lo stesso
+  vault, su qualunque sistema o tastiera. Per i vault creati prima di questa regola, se la
+  forma normalizzata non apre, pwdv riprova con la password così come è stata digitata.
 - L'hash della master password non viene mai salvato.
 
 ### Parametri di Argon2id
@@ -304,6 +309,9 @@ della CLI). Puoi scriverne un altro, poi premi **Apri** o **Invio**.
 ### 5.2 Crea un nuovo vault
 
 1. Scegli una **master password** di almeno **15 caratteri** e scrivila nel primo campo.
+   Sono rifiutate le password che compaiono in un elenco di password comuni o trafugate,
+   i blocchi ripetuti (`trottolatrottola`), le sequenze (`abcdef…`, `1234…`) e quelle che
+   contengono la parola "pwdv". Non ci sono regole su maiuscole, cifre o simboli.
 2. Premi **Invio** e riscrivila nel campo di conferma.
 3. Premi **Invio** o **Crea vault**.
 
@@ -422,6 +430,9 @@ pwdv init
 # created /home/mario/.vault.pwdv
 ```
 
+La master password deve rispettare le regole descritte nella [sezione 5.2](#52-crea-un-nuovo-vault);
+altrimenti `init` termina con un messaggio che spiega il motivo, senza creare il file.
+
 ### Aggiungi una voce
 
 ```sh
@@ -463,8 +474,23 @@ pwdv rm GitHub
 pwdv passwd
 ```
 
-Chiede la password attuale e poi due volte la nuova (almeno 15 caratteri). Viene ricifrata solo la DEK, e il
+Chiede la password attuale e poi due volte la nuova (stesse regole di `init`: almeno 15
+caratteri, non comune, non ripetuta o in sequenza, senza "pwdv"). Viene ricifrata solo la DEK, e il
 file `.bak` viene eliminato perché si aprirebbe ancora con la vecchia password.
+
+### Sostituisci la chiave dei dati
+
+```sh
+pwdv rekey
+```
+
+Chiede la master password attuale, genera una nuova DEK casuale e ricifra l'intero vault
+da capo (nuovo salt, nuovi nonce, parametri Argon2id predefiniti). Il contenuto non
+cambia. Da usare **dopo `pwdv passwd`** quando la vecchia master password potrebbe essere
+nota a qualcuno: le copie vecchie del file, anche insieme alla vecchia password, non
+aprono più il vault attuale. Il `.bak` conserva la versione precedente, che si apre solo
+con la password attuale. Se la GUI ha il vault aperto, al salvataggio successivo
+rifiuterà di sovrascriverlo: chiudila prima di eseguire `rekey`.
 
 ### Genera una password casuale
 
@@ -554,8 +580,12 @@ Consigli:
 > **Cambio password e vecchie copie.** Il cambio password ricifra solo la DEK, che resta
 > la stessa. Chi possiede una vecchia copia del file e la vecchia password può quindi
 > ricavare la DEK e, finché non cambia, decifrare anche il vault attuale. Se sospetti che
-> la vecchia master password sia stata scoperta, non basta cambiarla: crea un nuovo vault
-> con una nuova password e trasferisci le voci.
+> la vecchia master password sia stata scoperta, non basta cambiarla: dopo `pwdv passwd`
+> esegui `pwdv rekey` (vedi [sezione 6](#sostituisci-la-chiave-dei-dati)).
+>
+> La DEK cambia anche a ogni salvataggio fatto dalla CLI (`add`, `rm`), che ricifra il
+> vault da capo; i salvataggi della GUI invece la mantengono. `rekey` rende la
+> sostituzione esplicita, senza dover modificare una voce.
 
 ---
 
@@ -567,7 +597,9 @@ Consigli:
   memoria del processo. Restano però copie gestite da librerie esterne che pwdv non
   controlla: il testo digitato attraversa gli eventi di egui e winit; una password
   rivelata passa dalla cache del testo di egui; una password copiata viene duplicata da
-  arboard per servirla al clipboard, e quella copia viene liberata senza essere azzerata.
+  arboard per servirla al clipboard, e quella copia viene liberata senza essere azzerata;
+  la normalizzazione Unicode di una master password con caratteri non ASCII usa buffer
+  interni di `unicode-normalization`, anch'essi liberati senza azzeramento.
 - **Ctrl+C nei campi di testo.** Copiare con Ctrl+C il testo selezionato nei campi che
   non sono password (username, note) usa il clipboard di egui: quelle copie non sono
   marcate e non vengono cancellate. I campi password non si possono copiare.
@@ -584,8 +616,8 @@ Consigli:
 
 | Crate | Moduli principali |
 |---|---|
-| `pwdv-core` | `format` (header v1), `crypto` (Argon2id, XChaCha20-Poly1305, KEK/DEK), `key` (chiavi da 32 byte), `policy` (regole sulle nuove master password), `vault` (voci), `store` (lettura, scrittura atomica, `.bak`), `error` |
-| `pwdv-cli` | `main.rs`: comandi `init`, `add`, `get`, `list`, `rm`, `passwd`, `gen` |
+| `pwdv-core` | `format` (header v1), `crypto` (Argon2id, XChaCha20-Poly1305, KEK/DEK), `key` (chiavi da 32 byte), `policy` (regole sulle nuove master password, NFKC; elenco in `data/common-passwords.txt` da [SecLists](https://github.com/danielmiessler/SecLists), licenza MIT), `vault` (voci), `store` (lettura, scrittura atomica, `.bak`), `error` |
+| `pwdv-cli` | `main.rs`: comandi `init`, `add`, `get`, `list`, `rm`, `passwd`, `rekey`, `gen` |
 | `pwdv-gui` | `app` (macchina a stati), `unlock` (sblocco e creazione), `worker` (Argon2 fuori dal thread della UI), `main_view` (elenco e dettaglio), `security` (blocco automatico e clipboard) |
 
 ### Test e controlli

@@ -42,6 +42,7 @@ flowchart LR
 | `zeroize` | 1 (feat. `zeroize_derive`) | Azzeramento di chiavi e plaintext | Riduce la permanenza di segreti in memoria | core, cli, gui |
 | `serde` + `serde_json` | 1 | Serializzazione del contenuto del vault (JSON) | Schema semplice e versionato | `pwdv-core/src/vault.rs` |
 | `thiserror` | 1 | Tipo `VaultError` | Errori tipizzati senza segreti | `pwdv-core/src/error.rs` |
+| `unicode-normalization` | 0.1.26 | NFKC della master password prima di Argon2id | NIST SP 800-63B — [ADR 0005](decisions/0005-normalizzazione-nfkc-master-password.md) | `pwdv-core/src/policy.rs`, usata in `crypto.rs` |
 | `clap` | 4 (feat. `derive`) | Parsing comandi CLI | Standard de facto | `pwdv-cli` |
 | `rpassword` | 7 | Lettura password da terminale senza eco | Password mai come argomenti | `pwdv-cli` |
 | `eframe` / `egui` | 0.36 (`glow`, `wayland`, `x11`, `accesskit`, `default_fonts`; **niente `persistence`**) | GUI immediate-mode | [ADR 0003](decisions/0003-gui-eframe-egui.md) | `pwdv-gui` |
@@ -56,16 +57,16 @@ flowchart LR
   - `format` — `MAGIC`, `VERSION`, `HEADER_LEN = 130`, `KdfParams`, `Header::parse` / `to_bytes`
   - `crypto` — `derive_kek`, `seal`, `seal_with_key`, `reseal`, `open`, `open_with_key`, `change_master`, `VaultKey` (DEK + header[0..106], con `matches()` per rilevare riscritture)
   - `key` — `Key32` (ZeroizeOnDrop, accesso via `as_bytes()`)
-  - `policy` — `MIN_MASTER_CHARS = 15`, `master_long_enough()`: applicata da CLI (`init`, `passwd`) e GUI (creazione), mai allo sblocco — [ADR 0004](decisions/0004-lunghezza-minima-master-password.md)
+  - `policy` — `MIN_MASTER_CHARS = 15`, `check_new_master()` → `Weakness` (lunghezza, elenco comune incorporato da `data/common-passwords.txt`, ripetizioni, sequenze, parola "pwdv"); `nfkc()` usata da `crypto`. Applicata da CLI (`init`, `passwd`) e GUI (creazione), mai allo sblocco — ADR [0004](decisions/0004-lunghezza-minima-master-password.md), [0005](decisions/0005-normalizzazione-nfkc-master-password.md), [0006](decisions/0006-elenco-password-comuni.md)
   - `vault` — `Entry`, `VaultData`, `DATA_VERSION = 1`
-  - `store` — `load`, `load_with_key`, `save`, `save_with_key`, `create`, `change_password`
+  - `store` — `load`, `load_with_key`, `save`, `save_with_key`, `create`, `change_password`, `rekey`
   - `error` — `VaultError` (`BadMagic`, `UnsupportedVersion`, `Truncated`, `AuthFailed`, `Malformed`, `Conflict`, `Kdf`, `Io`)
 - **Dati posseduti**: il file `.pwdv` e `<vault>.bak`.
 
 ### pwdv-cli (binario `pwdv`)
 - **Responsabilità**: interfaccia da terminale; messaggi in inglese.
 - **Dipende da**: pwdv-core, clap, rand, rpassword, zeroize.
-- **Espone**: comandi `init`, `add`, `get`, `list`, `rm`, `passwd`, `gen`; opzione `--vault <PATH>` (default `$HOME/.vault.pwdv`).
+- **Espone**: comandi `init`, `add`, `get`, `list`, `rm`, `passwd`, `rekey`, `gen`; opzione `--vault <PATH>` (default `$HOME/.vault.pwdv`).
 - **Dati posseduti**: nessuno oltre al vault. Ogni comando deriva la KEK dalla master password (nessuna sessione).
 
 ### pwdv-gui (binario `pwdv-gui`)
@@ -110,6 +111,13 @@ flowchart LR
 1. `store::change_password`: unwrap della DEK con la vecchia password.
 2. Nuovo salt, nuova KEK, re-wrap della DEK; il ciphertext del vault resta identico.
 3. Il `.bak` viene eliminato (si aprirebbe con la vecchia password).
+
+**Sostituzione della DEK (CLI `pwdv rekey`)**
+1. `store::rekey`: `crypto::open` con la password attuale (Argon2id + unwrap + verifica del tag).
+2. `crypto::seal` sullo stesso plaintext: nuova DEK, salt e nonce da `OsRng`, parametri KDF predefiniti.
+3. Scrittura atomica; il file precedente diventa `.bak`. Una GUI aperta con la vecchia chiave riceve `Conflict`.
+
+Nota: anche `store::save` (CLI `add`, `rm`) passa da `crypto::seal`, quindi ogni salvataggio della CLI genera una DEK nuova; `save_with_key` (GUI) la mantiene.
 
 **Blocco (GUI)**: Ctrl+L, menu o `IdleTimer` scaduto → salvataggio della bozza valida → svuotamento clipboard → drop della `Session` (DEK e voci azzerate) → `Unlocking`.
 
@@ -156,4 +164,5 @@ Wayland/X11, AT-SPI (accessibilità).
 - Due GUI sullo stesso vault possono sovrascriversi (`Conflict` rileva solo cambi di chiave, non di contenuto).
 - Copie non azzerabili in egui/winit/arboard (documentato nel README §9).
 - Nessuna CI che esegua `cargo test` e `cargo clippy`.
-- NIST SP 800-63B, punti ancora aperti: normalizzazione Unicode (NFKC) della master password prima di Argon2id e controllo contro password note o compromesse. Entrambi richiedono nuove dipendenze (vedi ADR 0004).
+- Elenco di password comuni statico (SecLists xato-net, 10.898 voci ≥ 15 caratteri): non si aggiorna da solo e non copre le violazioni recenti (ADR 0006).
+- Doppio percorso di sblocco per i vault creati prima di NFKC (ADR 0005): un vault resta "legacy" finché non si cambia la password.
